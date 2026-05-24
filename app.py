@@ -78,6 +78,7 @@ def money(value):
     except Exception:
         return str(value)
 
+
 def parse_number(value):
     try:
         cleaned = (
@@ -93,10 +94,12 @@ def parse_number(value):
     except Exception:
         return 0.0
 
+
 def sale_price_from_margin(cost, margin_pct):
     if margin_pct <= 0 or margin_pct >= 100:
         return cost
     return cost / (1 - margin_pct / 100)
+
 
 def get_room_options(project_type):
     room_options_map = {
@@ -125,6 +128,27 @@ def get_room_options(project_type):
         ],
     }
     return room_options_map.get(project_type, room_options_map["Other"])
+
+
+def get_item_productivity(item_name, rates_df):
+    try:
+        match = rates_df[rates_df["item"].astype(str) == str(item_name)]
+        if match.empty:
+            return 0.0
+        return float(match.iloc[0]["productivity_per_day"])
+    except Exception:
+        return 0.0
+
+
+def recalc_worker_days_from_saved_rows(df, rates_df):
+    total = 0.0
+    for _, row in df.iterrows():
+        qty = parse_number(row.get("quantity", 0))
+        productivity = get_item_productivity(row.get("item", ""), rates_df)
+        if productivity > 0:
+            total += qty / productivity
+    return total
+
 
 def check_headers_or_warn(df):
     if df.empty:
@@ -175,6 +199,7 @@ def connect_google_sheet():
 
     return ws
 
+
 def load_saved_costings():
     ws = connect_google_sheet()
     records = ws.get_all_records()
@@ -188,6 +213,7 @@ def load_saved_costings():
             df[h] = ""
 
     return df
+
 
 def update_costing_records(quote_id, updated_df):
     ws = connect_google_sheet()
@@ -346,7 +372,7 @@ if page == "Saved Costings":
     st.stop()
 
 # =========================================================
-# MANAGER VIEW - COMPACT
+# MANAGER VIEW - COMPACT AND FIXED DURATION
 # =========================================================
 
 if page == "Manager View":
@@ -444,7 +470,7 @@ if page == "Manager View":
 
     st.markdown("### Program Summary")
 
-    total_worker_days = selected_df["worker_days"].apply(parse_number).sum()
+    total_worker_days = recalc_worker_days_from_saved_rows(selected_df, rates_df)
     labourers = 2
     estimated_duration = total_worker_days / labourers if labourers > 0 else 0
     rounded_duration = ceil(estimated_duration) if estimated_duration > 0 else 0
@@ -791,10 +817,12 @@ if "room_items" not in st.session_state:
 if "reset_counter" not in st.session_state:
     st.session_state.reset_counter = 0
 
+
 def add_room():
     idx = st.session_state.room_count
     st.session_state.room_count += 1
     st.session_state.room_items[idx] = 1
+
 
 def remove_room():
     if st.session_state.room_count > 1:
@@ -802,12 +830,15 @@ def remove_room():
         st.session_state.room_items.pop(idx, None)
         st.session_state.room_count -= 1
 
+
 def add_work_item(room_idx):
     st.session_state.room_items[room_idx] += 1
+
 
 def remove_work_item(room_idx):
     if st.session_state.room_items[room_idx] > 1:
         st.session_state.room_items[room_idx] -= 1
+
 
 def reset_all():
     st.session_state.room_count = 1
