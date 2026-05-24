@@ -5,48 +5,41 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from math import ceil
  
+# =========================================================
+# AARON'S PRICING CALCULATOR
+# Full stable version with:
+# - New Costing
+# - Saved Costings
+# - Manager View compact
+# - Edit Costing basic with dropdowns
+# - Google Sheets integration
+# - AUD formatting
+# - Wall / Area calculators
+# - Labour, duration, GST, margin and multipliers
+# =========================================================
+ 
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQi2XaKTk3vZnIWejQCiCVNqLwJRcDKYThJCKHOH4iPA_JdDQFEUTcKq5BYRDtbAFDYcu6gWnqQgH2/pub?output=csv"
 SPREADSHEET_NAME = "Aarons Pricing Database"
  
-APP_HEADERS = [
+HEADERS = [
     "quote_id", "date", "client_name", "project_address", "project_type",
     "working_hours", "floor_level", "room_area", "item", "category", "unit",
     "measurement_method", "quantity", "rate", "item_total", "worker_days",
     "equipment_cost", "disposal_cost", "truck_cost", "other_cost",
     "difficulty_percent", "difficulty_allowance", "labour_cost",
     "supervisor_cost", "direct_cost", "recommended_price", "gst_total",
-    "final_total", "notes", "labourers", "estimated_worker_days",
-    "estimated_duration_days", "rounded_days"
+    "final_total", "notes"
 ]
  
-st.set_page_config(page_title="Aaron's Pricing Calculator", page_icon="🧾", layout="wide")
- 
-page = st.sidebar.radio(
-    "Navigation",
-    ["New Costing", "Saved Costings", "Manager View", "Edit Costing"]
+st.set_page_config(
+    page_title="Aaron's Pricing Calculator",
+    page_icon="🧾",
+    layout="wide"
 )
- 
-st.title("🧾 Aaron's Pricing Calculator")
-st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
  
 # =========================================================
 # HELPERS
 # =========================================================
- 
-def parse_number(value):
-    try:
-        clean = str(value)
-        clean = clean.replace("AUD", "")
-        clean = clean.replace("$", "")
-        clean = clean.replace(",", "")
-        clean = clean.replace("%", "")
-        clean = clean.strip()
-        if clean == "" or clean.lower() == "nan":
-            return 0.0
-        return float(clean)
-    except Exception:
-        return 0.0
- 
  
 def money(value):
     try:
@@ -55,43 +48,59 @@ def money(value):
         return str(value)
  
  
-def pct(value):
+def parse_number(value):
     try:
-        return f"{float(value):.1f}%"
+        clean = (
+            str(value)
+            .replace("AUD", "")
+            .replace(",", "")
+            .replace("%", "")
+            .strip()
+        )
+        if clean == "":
+            return 0.0
+        return float(clean)
     except Exception:
-        return str(value)
- 
- 
-def safe_text(value):
-    if value is None:
-        return ""
-    if str(value).lower() == "nan":
-        return ""
-    return str(value)
- 
- 
-def get_productivity(item_name, default=1.0):
-    try:
-        match = rates_df[rates_df["item"] == item_name]
-        if match.empty:
-            return default
-        value = float(match.iloc[0]["productivity_per_day"])
-        return value if value > 0 else default
-    except Exception:
-        return default
+        return 0.0
  
  
 def sale_price_from_margin(cost, margin_pct):
-    if margin_pct <= 0 or margin_pct >= 100:
+    try:
+        margin_pct = float(margin_pct)
+        cost = float(cost)
+        if margin_pct <= 0 or margin_pct >= 100:
+            return cost
+        return cost / (1 - margin_pct / 100)
+    except Exception:
         return cost
-    return cost / (1 - margin_pct / 100)
  
  
-def build_quote_label(row):
-    address = safe_text(row.get("project_address", "TBC"))
-    client = safe_text(row.get("client_name", "TBC"))
-    quote = safe_text(row.get("quote_id", ""))
-    return f"{address} - {client} ({quote})"
+def get_room_options(project_type):
+    room_options_map = {
+        "Residential": [
+            "Kitchen", "Bathroom", "Laundry", "Bedroom", "Living Room",
+            "Dining Room", "Hallway", "Garage", "Backyard", "Other"
+        ],
+        "Commercial": [
+            "Tenancy Area", "Office", "Reception", "Meeting Room", "Kitchenette",
+            "Bathroom", "Storage", "Shopfront", "Common Area", "Other"
+        ],
+        "Industrial": [
+            "Warehouse Floor", "Racking Area", "Loading Bay", "Office Area",
+            "Mezzanine", "Yard", "Concrete Area", "Storage Area", "Waste Area", "Other"
+        ],
+        "Shopping Centre": [
+            "Tenancy Area", "Food Court", "Shopfront", "Kitchen", "Coolroom",
+            "Common Area", "Back of House", "Storage", "Other"
+        ],
+        "Warehouse": [
+            "Warehouse Floor", "Racking Area", "Office Area", "Loading Bay",
+            "Mezzanine", "Yard", "Waste Area", "Other"
+        ],
+        "Other": ["Area 1", "Area 2", "Room", "External Area", "Internal Area", "Other"]
+    }
+    return room_options_map.get(project_type, room_options_map["Other"])
+ 
  
 # =========================================================
 # GOOGLE SHEETS CONNECTION
@@ -102,79 +111,77 @@ def connect_google_sheet():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
     ]
+ 
     creds = Credentials.from_service_account_info(
         st.secrets["gcp_service_account"],
         scopes=scopes
     )
+ 
     client = gspread.authorize(creds)
     spreadsheet = client.open(SPREADSHEET_NAME)
  
     try:
         ws = spreadsheet.worksheet("Costing_Records")
-    except Exception:
-        ws = spreadsheet.add_worksheet(title="Costing_Records", rows="5000", cols="80")
-        ws.append_row(APP_HEADERS)
-        return ws
- 
-    current_headers = ws.row_values(1)
-    if not current_headers:
-        ws.update("A1", [APP_HEADERS])
-    else:
-        new_headers = current_headers.copy()
-        for h in APP_HEADERS:
-            if h not in new_headers:
-                new_headers.append(h)
-        if new_headers != current_headers:
-            ws.update("A1", [new_headers])
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(
+            title="Costing_Records",
+            rows="5000",
+            cols="50"
+        )
+        ws.append_row(HEADERS)
  
     return ws
  
  
+def ensure_headers(ws):
+    values = ws.get_all_values()
+    if not values:
+        ws.append_row(HEADERS)
+        return
+ 
+    current_headers = values[0]
+    if current_headers != HEADERS:
+        # This does not overwrite existing data. It only warns inside the app.
+        st.warning("Costing_Records headers do not exactly match the expected app headers.")
+ 
+ 
 def load_saved_costings():
     ws = connect_google_sheet()
+    ensure_headers(ws)
     records = ws.get_all_records()
     if not records:
-        return pd.DataFrame(columns=APP_HEADERS)
+        return pd.DataFrame(columns=HEADERS)
     df = pd.DataFrame(records)
-    for h in APP_HEADERS:
-        if h not in df.columns:
-            df[h] = ""
-    return df
+    for col in HEADERS:
+        if col not in df.columns:
+            df[col] = ""
+    return df[HEADERS]
  
  
-def update_costing_records(quote_id, updated_df):
+def replace_quote_records(quote_id, updated_rows):
     ws = connect_google_sheet()
     all_values = ws.get_all_values()
  
     if not all_values:
-        ws.update("A1", [APP_HEADERS])
-        all_values = [APP_HEADERS]
+        ws.update([HEADERS])
+        all_values = [HEADERS]
  
     headers = all_values[0]
-    for h in APP_HEADERS:
-        if h not in headers:
-            headers.append(h)
+    if "quote_id" not in headers:
+        raise ValueError("quote_id column not found in Costing_Records")
  
-    quote_col_index = headers.index("quote_id")
+    quote_col_idx = headers.index("quote_id")
+ 
     rows_to_keep = [headers]
- 
     for row in all_values[1:]:
-        padded_row = row + [""] * (len(headers) - len(row))
-        if len(padded_row) > quote_col_index and padded_row[quote_col_index] != quote_id:
-            rows_to_keep.append(padded_row[:len(headers)])
+        row_quote = row[quote_col_idx] if len(row) > quote_col_idx else ""
+        if row_quote != quote_id:
+            rows_to_keep.append(row)
  
     ws.clear()
-    ws.update("A1", rows_to_keep)
+    ws.update(rows_to_keep, value_input_option="RAW")
+    ws.append_rows(updated_rows, value_input_option="RAW")
  
-    final_df = updated_df.copy()
-    for h in headers:
-        if h not in final_df.columns:
-            final_df[h] = ""
-    final_df = final_df[headers]
- 
-    new_rows = final_df.values.tolist()
-    if new_rows:
-        ws.append_rows(new_rows, value_input_option="RAW")
  
 # =========================================================
 # LOAD RATES
@@ -195,15 +202,28 @@ def load_rates(url):
         st.error(f"Missing columns in Rates sheet: {missing}")
         st.stop()
  
-    for c in ["market_min", "market_recommended", "market_high", "productivity_per_day"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    for col in ["market_min", "market_recommended", "market_high", "productivity_per_day"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
  
-    for c in ["item", "category", "unit", "notes"]:
-        df[c] = df[c].astype(str).str.strip()
+    for col in ["item", "category", "unit", "notes"]:
+        df[col] = df[col].astype(str).str.strip()
  
     return df
  
+ 
 rates_df = load_rates(SHEET_CSV_URL)
+ 
+# =========================================================
+# SIDEBAR NAVIGATION
+# =========================================================
+ 
+page = st.sidebar.radio(
+    "Navigation",
+    ["New Costing", "Saved Costings", "Manager View", "Edit Costing"]
+)
+ 
+st.title("🧾 Aaron's Pricing Calculator")
+st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
  
 # =========================================================
 # SAVED COSTINGS PAGE
@@ -211,306 +231,277 @@ rates_df = load_rates(SHEET_CSV_URL)
  
 if page == "Saved Costings":
     st.title("📂 Saved Costings")
- 
     saved_df = load_saved_costings()
+ 
     if saved_df.empty:
         st.warning("No saved costings found.")
         st.stop()
  
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    with filter_col1:
         client_filter = st.text_input("Search Client")
-    with c2:
+    with filter_col2:
         project_filter = st.text_input("Search Project Address")
-    with c3:
+    with filter_col3:
         quote_filter = st.text_input("Search Quote ID")
  
+    filtered_df = saved_df.copy()
     if client_filter:
-        saved_df = saved_df[saved_df["client_name"].astype(str).str.contains(client_filter, case=False, na=False)]
+        filtered_df = filtered_df[filtered_df["client_name"].astype(str).str.contains(client_filter, case=False, na=False)]
     if project_filter:
-        saved_df = saved_df[saved_df["project_address"].astype(str).str.contains(project_filter, case=False, na=False)]
+        filtered_df = filtered_df[filtered_df["project_address"].astype(str).str.contains(project_filter, case=False, na=False)]
     if quote_filter:
-        saved_df = saved_df[saved_df["quote_id"].astype(str).str.contains(quote_filter, case=False, na=False)]
+        filtered_df = filtered_df[filtered_df["quote_id"].astype(str).str.contains(quote_filter, case=False, na=False)]
  
-    if saved_df.empty:
-        st.warning("No records match the search.")
+    if filtered_df.empty:
+        st.warning("No matching costings found.")
         st.stop()
  
-    summary_df = saved_df.drop_duplicates(subset=["quote_id"], keep="last")[[
-        "quote_id", "date", "client_name", "project_address", "final_total"
-    ]]
+    summary_df = filtered_df.groupby(
+        ["quote_id", "date", "client_name", "project_address"],
+        as_index=False
+    ).agg({"final_total": "last"})
+ 
+    summary_df["display"] = summary_df["project_address"].astype(str) + " - " + summary_df["client_name"].astype(str)
  
     st.markdown("## Costing Records")
-    st.dataframe(summary_df, use_container_width=True)
+    st.dataframe(summary_df[["display", "quote_id", "date", "final_total"]], use_container_width=True)
  
-    label_map = {build_quote_label(row): row["quote_id"] for _, row in summary_df.iterrows()}
-    selected_label = st.selectbox("Select Quote", list(label_map.keys()))
-    selected_quote = label_map[selected_label]
+    selected_display = st.selectbox("Open Costing", summary_df["display"].tolist())
+    selected_quote = summary_df.loc[summary_df["display"] == selected_display, "quote_id"].iloc[0]
+    selected_df = filtered_df[filtered_df["quote_id"] == selected_quote]
  
-    selected_df = saved_df[saved_df["quote_id"] == selected_quote]
-    if not selected_df.empty:
-        st.markdown("### Full Costing Breakdown")
-        st.dataframe(selected_df, use_container_width=True)
- 
+    st.markdown("### Full Costing Breakdown")
+    st.dataframe(selected_df, use_container_width=True)
     st.stop()
  
+ 
 # =========================================================
-# MANAGER VIEW
+# MANAGER VIEW PAGE - COMPACT
 # =========================================================
  
 if page == "Manager View":
-    st.title("📊 Manager Costing View")
- 
+    st.title("📊 Manager View")
     saved_df = load_saved_costings()
+ 
     if saved_df.empty:
         st.warning("No saved costings found.")
         st.stop()
  
-    summary_df = saved_df.drop_duplicates(subset=["quote_id"], keep="last")[[
-        "quote_id", "date", "client_name", "project_address", "final_total"
-    ]]
+    summary_df = saved_df.groupby(
+        ["quote_id", "date", "client_name", "project_address"],
+        as_index=False
+    ).agg({"final_total": "last"})
  
-    label_map = {build_quote_label(row): row["quote_id"] for _, row in summary_df.iterrows()}
-    selected_label = st.selectbox("Select Quote", list(label_map.keys()))
-    selected_quote = label_map[selected_label]
+    summary_df["display"] = summary_df["project_address"].astype(str) + " - " + summary_df["client_name"].astype(str)
  
+    selected_display = st.selectbox("Select Project", summary_df["display"].tolist())
+    selected_quote = summary_df.loc[summary_df["display"] == selected_display, "quote_id"].iloc[0]
     selected_df = saved_df[saved_df["quote_id"] == selected_quote].copy()
  
-    if not selected_df.empty:
-        first_row = selected_df.iloc[0]
- 
-        total_worker_days = selected_df["worker_days"].apply(parse_number).sum()
-        labourers = parse_number(first_row.get("labourers", 2))
-        if labourers <= 0:
-            labourers = 1
-        estimated_duration = total_worker_days / labourers if labourers > 0 else 0
-        rounded_duration = ceil(estimated_duration) if estimated_duration > 0 else 0
- 
-        st.markdown("## Project Information")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("Client", safe_text(first_row["client_name"]))
-            st.metric("Project Address", safe_text(first_row["project_address"]))
-        with c2:
-            st.metric("Project Type", safe_text(first_row["project_type"]))
-            st.metric("Working Hours", safe_text(first_row["working_hours"]))
- 
-        st.divider()
-        st.markdown("## Financial Summary")
- 
-        f1, f2, f3 = st.columns(3)
-        f1.metric("Direct Cost", safe_text(first_row["direct_cost"]))
-        f2.metric("Recommended Price", safe_text(first_row["recommended_price"]))
-        f3.metric("Final Total", safe_text(first_row["final_total"]))
- 
-        f4, f5, f6 = st.columns(3)
-        f4.metric("Labour Cost", safe_text(first_row["labour_cost"]))
-        f5.metric("Supervisor Cost", safe_text(first_row["supervisor_cost"]))
-        f6.metric("Difficulty Allowance", safe_text(first_row["difficulty_allowance"]))
- 
-        f7, f8, f9 = st.columns(3)
-        f7.metric("Equipment Cost", safe_text(first_row["equipment_cost"]))
-        f8.metric("Disposal / Tip Fees", safe_text(first_row["disposal_cost"]))
-        f9.metric("Truck / Transport", safe_text(first_row["truck_cost"]))
- 
-        st.divider()
-        st.markdown("## Program Summary")
- 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Estimated Worker Days", f"{total_worker_days:.2f}")
-        p2.metric("Labourers", f"{labourers:g}")
-        p3.metric("Estimated Duration", f"{estimated_duration:.2f} days ({rounded_duration} rounded)")
- 
-        st.divider()
-        st.markdown("## Work Breakdown")
- 
-        manager_df = selected_df[["room_area", "item", "quantity", "rate", "item_total", "notes"]].copy()
-        manager_df.columns = ["Area", "Work Item", "Quantity", "Rate", "Total", "Notes"]
-        st.dataframe(manager_df, use_container_width=True)
- 
-    st.stop()
- 
-# =========================================================
-# EDIT COSTING PAGE
-# =========================================================
- 
-if page == "Edit Costing":
-    st.title("✏️ Edit Costing")
- 
-    saved_df = load_saved_costings()
-    if saved_df.empty:
-        st.warning("No saved costings found.")
-        st.stop()
- 
-    summary_df = saved_df.drop_duplicates(subset=["quote_id"], keep="last")[[
-        "quote_id", "date", "client_name", "project_address", "final_total"
-    ]]
- 
-    label_map = {build_quote_label(row): row["quote_id"] for _, row in summary_df.iterrows()}
-    selected_label = st.selectbox("Select Quote to Edit", list(label_map.keys()))
-    selected_quote = label_map[selected_label]
- 
-    selected_df = saved_df[saved_df["quote_id"] == selected_quote].copy()
     if selected_df.empty:
         st.warning("No records found for this quote.")
         st.stop()
  
     first_row = selected_df.iloc[0]
  
-    st.markdown("## Project Details")
-    c1, c2 = st.columns(2)
-    with c1:
-        edit_client = st.text_input("Client Name", value=safe_text(first_row["client_name"]))
-        edit_address = st.text_input("Project Address", value=safe_text(first_row["project_address"]))
-    with c2:
-        project_options = ["Residential", "Commercial", "Industrial", "Shopping Centre", "Warehouse", "Other"]
-        current_project_type = safe_text(first_row["project_type"])
-        project_index = project_options.index(current_project_type) if current_project_type in project_options else 0
-        edit_project_type = st.selectbox("Project Type", project_options, index=project_index)
+    st.markdown("### Project")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.caption("Client")
+    p1.write(str(first_row["client_name"]))
+    p2.caption("Address")
+    p2.write(str(first_row["project_address"]))
+    p3.caption("Type")
+    p3.write(str(first_row["project_type"]))
+    p4.caption("Hours")
+    p4.write(str(first_row["working_hours"]))
  
-        hours_options = ["Business Hours", "After Hours", "Weekend", "Day & Night", "To be confirmed"]
-        current_hours = safe_text(first_row["working_hours"])
-        hours_index = hours_options.index(current_hours) if current_hours in hours_options else 0
-        edit_working_hours = st.selectbox("Working Hours", hours_options, index=hours_index)
+    st.markdown("### Financial Summary")
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("Direct Cost", str(first_row["direct_cost"]))
+    f2.metric("Labour", str(first_row["labour_cost"]))
+    f3.metric("Supervisor", str(first_row["supervisor_cost"]))
+    f4.metric("Final Total", str(first_row["final_total"]))
  
-    st.markdown("## Edit Work Items")
+    f5, f6, f7, f8 = st.columns(4)
+    f5.metric("Equipment", str(first_row["equipment_cost"]))
+    f6.metric("Disposal", str(first_row["disposal_cost"]))
+    f7.metric("Truck", str(first_row["truck_cost"]))
+    f8.metric("GST", str(first_row["gst_total"]))
  
-    edit_cols = ["room_area", "item", "category", "unit", "measurement_method", "quantity", "rate", "notes"]
-    editable_df = selected_df[edit_cols].copy()
+    total_worker_days = selected_df["worker_days"].apply(parse_number).sum()
+    # The current saved database does not store labourer count. Using 2 as default.
+    default_labourers = 2
+    estimated_duration = total_worker_days / default_labourers if default_labourers > 0 else 0
+    rounded_duration = ceil(estimated_duration) if estimated_duration > 0 else 0
+ 
+    st.markdown("### Program Summary")
+    d1, d2, d3 = st.columns(3)
+    d1.metric("Estimated Worker Days", f"{total_worker_days:.2f}")
+    d2.metric("Labourers", str(default_labourers))
+    d3.metric("Estimated Duration", f"{estimated_duration:.2f} days ({rounded_duration} rounded)")
+ 
+    st.markdown("### Work Breakdown")
+    manager_df = selected_df[["room_area", "item", "quantity", "unit", "rate", "item_total", "notes"]].copy()
+    manager_df.columns = ["Area", "Work Item", "Qty", "Unit", "Rate", "Total", "Notes"]
+    st.dataframe(manager_df, use_container_width=True, height=280)
+    st.stop()
+ 
+ 
+# =========================================================
+# EDIT COSTING PAGE - BASIC EDIT WITH DROPDOWNS
+# =========================================================
+ 
+if page == "Edit Costing":
+    st.title("✏️ Edit Costing")
+    saved_df = load_saved_costings()
+ 
+    if saved_df.empty:
+        st.warning("No saved costings found.")
+        st.stop()
+ 
+    summary_df = saved_df.groupby(
+        ["quote_id", "date", "client_name", "project_address"],
+        as_index=False
+    ).agg({"final_total": "last"})
+ 
+    summary_df["display"] = summary_df["project_address"].astype(str) + " - " + summary_df["client_name"].astype(str)
+ 
+    selected_display = st.selectbox("Select Project to Edit", summary_df["display"].tolist())
+    selected_quote = summary_df.loc[summary_df["display"] == selected_display, "quote_id"].iloc[0]
+    selected_df = saved_df[saved_df["quote_id"] == selected_quote].copy()
+ 
+    if selected_df.empty:
+        st.warning("No records found for this quote.")
+        st.stop()
+ 
+    first_row = selected_df.iloc[0]
+ 
+    st.markdown("### Project Details")
+    e1, e2, e3, e4 = st.columns(4)
+    with e1:
+        edit_client = st.text_input("Client", value=str(first_row["client_name"]))
+    with e2:
+        edit_address = st.text_input("Project Address", value=str(first_row["project_address"]))
+    with e3:
+        edit_project_type = st.selectbox(
+            "Project Type",
+            ["Residential", "Commercial", "Industrial", "Shopping Centre", "Warehouse", "Other"],
+            index=["Residential", "Commercial", "Industrial", "Shopping Centre", "Warehouse", "Other"].index(str(first_row["project_type"]))
+            if str(first_row["project_type"]) in ["Residential", "Commercial", "Industrial", "Shopping Centre", "Warehouse", "Other"] else 0
+        )
+    with e4:
+        edit_working_hours = st.selectbox(
+            "Working Hours",
+            ["Business Hours", "After Hours", "Weekend", "Day & Night", "To be confirmed"],
+            index=["Business Hours", "After Hours", "Weekend", "Day & Night", "To be confirmed"].index(str(first_row["working_hours"]))
+            if str(first_row["working_hours"]) in ["Business Hours", "After Hours", "Weekend", "Day & Night", "To be confirmed"] else 0
+        )
+ 
+    st.markdown("### Editable Items")
+    st.caption("You can change Area, Item, Category, Measurement Method, Quantity, Rate and Notes. Totals recalculate below.")
+ 
+    editable_cols = ["room_area", "item", "category", "unit", "measurement_method", "quantity", "rate", "notes"]
+    editable_df = selected_df[editable_cols].copy()
+ 
+    category_options = sorted(rates_df["category"].dropna().unique().tolist())
+    item_options = sorted(rates_df["item"].dropna().unique().tolist())
+    unit_options = sorted(rates_df["unit"].dropna().unique().tolist())
+    measurement_options = ["Manual Quantity", "Wall Calculator (Total Length x Height)", "Area Calculator (Length x Width)"]
+    room_options = get_room_options(edit_project_type)
  
     edited_df = st.data_editor(
         editable_df,
         use_container_width=True,
         num_rows="dynamic",
-        key="edit_costing_table"
+        column_config={
+            "room_area": st.column_config.SelectboxColumn("Area", options=room_options + ["Area 1", "Area 2", "Other"]),
+            "item": st.column_config.SelectboxColumn("Work Item", options=item_options),
+            "category": st.column_config.SelectboxColumn("Category", options=category_options),
+            "unit": st.column_config.SelectboxColumn("Unit", options=unit_options),
+            "measurement_method": st.column_config.SelectboxColumn("Measurement Method", options=measurement_options),
+            "quantity": st.column_config.TextColumn("Quantity"),
+            "rate": st.column_config.TextColumn("Rate"),
+            "notes": st.column_config.TextColumn("Notes")
+        },
+        key="edit_costing_editor"
     )
  
-    st.markdown("## Cost Inputs")
+    st.markdown("### Cost Controls")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        edit_equipment = st.text_input("Equipment Cost", value=str(first_row["equipment_cost"]))
+    with c2:
+        edit_disposal = st.text_input("Disposal / Tip Fees", value=str(first_row["disposal_cost"]))
+    with c3:
+        edit_truck = st.text_input("Truck / Transport", value=str(first_row["truck_cost"]))
+    with c4:
+        edit_other = st.text_input("Other Cost", value=str(first_row["other_cost"]))
  
-    r1, r2, r3, r4 = st.columns(4)
-    with r1:
-        edit_equipment_cost = st.text_input("Equipment Cost", value=safe_text(first_row["equipment_cost"]))
-    with r2:
-        edit_disposal_cost = st.text_input("Disposal / Tip Fees", value=safe_text(first_row["disposal_cost"]))
-    with r3:
-        edit_truck_cost = st.text_input("Truck / Transport Cost", value=safe_text(first_row["truck_cost"]))
-    with r4:
-        edit_other_cost = st.text_input("Other Cost", value=safe_text(first_row["other_cost"]))
- 
-    r5, r6, r7, r8 = st.columns(4)
-    with r5:
-        edit_labourers = st.number_input("Labourers", min_value=1, value=int(parse_number(first_row.get("labourers", 2)) or 2), step=1)
-    with r6:
-        edit_labourer_day_rate = st.number_input("Labourer Cost / Day", min_value=0.0, value=400.0, step=25.0)
-    with r7:
-        edit_supervisor_cost = st.text_input("Supervisor Cost", value=safe_text(first_row["supervisor_cost"]))
-    with r8:
-        edit_difficulty_percent = st.text_input("Difficulty %", value=safe_text(first_row["difficulty_percent"]))
- 
-    r9, r10 = st.columns(2)
-    with r9:
-        edit_margin = st.number_input("Recommended Margin %", min_value=0.0, max_value=80.0, value=30.0, step=1.0)
-    with r10:
-        edit_gst = st.number_input("GST %", min_value=0.0, max_value=20.0, value=10.0, step=0.5)
+    c5, c6, c7 = st.columns(3)
+    with c5:
+        edit_labour = st.text_input("Labour Cost", value=str(first_row["labour_cost"]))
+    with c6:
+        edit_supervisor = st.text_input("Supervisor Cost", value=str(first_row["supervisor_cost"]))
+    with c7:
+        edit_difficulty = st.text_input("Difficulty %", value=str(first_row["difficulty_percent"]))
  
     edited_df["quantity_num"] = edited_df["quantity"].apply(parse_number)
     edited_df["rate_num"] = edited_df["rate"].apply(parse_number)
     edited_df["item_total_num"] = edited_df["quantity_num"] * edited_df["rate_num"]
  
-    worker_days_list = []
-    for _, item_row in edited_df.iterrows():
-        productivity = get_productivity(safe_text(item_row["item"]), default=1.0)
-        qty = parse_number(item_row["quantity"])
-        worker_days_list.append(qty / productivity if productivity > 0 else 0)
-    edited_df["worker_days_num"] = worker_days_list
- 
     base_total = edited_df["item_total_num"].sum()
-    total_worker_days = edited_df["worker_days_num"].sum()
-    estimated_duration = total_worker_days / edit_labourers if edit_labourers > 0 else 0
-    rounded_duration = ceil(estimated_duration) if estimated_duration > 0 else 0
+    equipment_num = parse_number(edit_equipment)
+    disposal_num = parse_number(edit_disposal)
+    truck_num = parse_number(edit_truck)
+    other_num = parse_number(edit_other)
+    labour_num = parse_number(edit_labour)
+    supervisor_num = parse_number(edit_supervisor)
+    difficulty_num = parse_number(edit_difficulty)
  
-    labour_cost = rounded_duration * edit_labourers * float(edit_labourer_day_rate)
-    equipment_num = parse_number(edit_equipment_cost)
-    disposal_num = parse_number(edit_disposal_cost)
-    truck_num = parse_number(edit_truck_cost)
-    other_num = parse_number(edit_other_cost)
-    supervisor_num = parse_number(edit_supervisor_cost)
-    difficulty_num = parse_number(edit_difficulty_percent)
- 
-    direct_cost = base_total + equipment_num + disposal_num + truck_num + other_num + labour_cost + supervisor_num
+    direct_cost = base_total + equipment_num + disposal_num + truck_num + other_num + labour_num + supervisor_num
     difficulty_allowance = direct_cost * (difficulty_num / 100)
     cost_with_difficulty = direct_cost + difficulty_allowance
-    recommended_price = sale_price_from_margin(cost_with_difficulty, edit_margin)
-    gst_total = recommended_price * (edit_gst / 100)
+    recommended_price = sale_price_from_margin(cost_with_difficulty, 30)
+    gst_total = recommended_price * 0.10
     final_total = recommended_price + gst_total
  
-    st.markdown("## Updated Summary")
-    s1, s2, s3 = st.columns(3)
-    s1.metric("Direct Cost", money(direct_cost))
-    s2.metric("Recommended Price", money(recommended_price))
-    s3.metric("Final Total Inc GST", money(final_total))
- 
-    s4, s5, s6 = st.columns(3)
-    s4.metric("Estimated Worker Days", f"{total_worker_days:.2f}")
-    s5.metric("Labourers", f"{edit_labourers}")
-    s6.metric("Estimated Duration", f"{estimated_duration:.2f} days ({rounded_duration} rounded)")
- 
-    st.markdown("## Save Changes")
+    st.markdown("### Updated Summary")
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Base Items", money(base_total))
+    s2.metric("Direct Cost", money(direct_cost))
+    s3.metric("Recommended", money(recommended_price))
+    s4.metric("Final Inc GST", money(final_total))
  
     if st.button("💾 Update Costing"):
         now = datetime.now().strftime("%d/%m/%Y %H:%M")
         updated_rows = []
- 
         for _, row in edited_df.iterrows():
             qty = parse_number(row["quantity"])
             rate = parse_number(row["rate"])
             item_total = qty * rate
-            worker_days = parse_number(row["worker_days_num"])
+            item_name = str(row["item"])
+            rate_match = rates_df[rates_df["item"] == item_name]
+            productivity = float(rate_match["productivity_per_day"].iloc[0]) if not rate_match.empty else 0
+            worker_days = qty / productivity if productivity > 0 else 0
  
-            updated_rows.append({
-                "quote_id": selected_quote,
-                "date": now,
-                "client_name": edit_client,
-                "project_address": edit_address,
-                "project_type": edit_project_type,
-                "working_hours": edit_working_hours,
-                "floor_level": safe_text(first_row["floor_level"]),
-                "room_area": safe_text(row["room_area"]),
-                "item": safe_text(row["item"]),
-                "category": safe_text(row["category"]),
-                "unit": safe_text(row["unit"]),
-                "measurement_method": safe_text(row["measurement_method"]),
-                "quantity": round(qty, 2),
-                "rate": money(rate),
-                "item_total": money(item_total),
-                "worker_days": round(worker_days, 2),
-                "equipment_cost": money(equipment_num),
-                "disposal_cost": money(disposal_num),
-                "truck_cost": money(truck_num),
-                "other_cost": money(other_num),
-                "difficulty_percent": pct(difficulty_num),
-                "difficulty_allowance": money(difficulty_allowance),
-                "labour_cost": money(labour_cost),
-                "supervisor_cost": money(supervisor_num),
-                "direct_cost": money(direct_cost),
-                "recommended_price": money(recommended_price),
-                "gst_total": money(gst_total),
-                "final_total": money(final_total),
-                "notes": safe_text(row["notes"]),
-                "labourers": int(edit_labourers),
-                "estimated_worker_days": round(total_worker_days, 2),
-                "estimated_duration_days": round(estimated_duration, 2),
-                "rounded_days": int(rounded_duration)
-            })
+            updated_rows.append([
+                str(selected_quote), str(now), str(edit_client), str(edit_address), str(edit_project_type),
+                str(edit_working_hours), str(first_row["floor_level"]), str(row["room_area"]), str(row["item"]),
+                str(row["category"]), str(row["unit"]), str(row["measurement_method"]), round(qty, 2),
+                money(rate), money(item_total), round(worker_days, 2), money(equipment_num), money(disposal_num),
+                money(truck_num), money(other_num), f"{difficulty_num:.1f}%", money(difficulty_allowance),
+                money(labour_num), money(supervisor_num), money(direct_cost), money(recommended_price),
+                money(gst_total), money(final_total), str(row["notes"])
+            ])
  
-        final_df = pd.DataFrame(updated_rows)
-        update_costing_records(selected_quote, final_df)
+        replace_quote_records(str(selected_quote), updated_rows)
         st.success(f"✅ Quote updated successfully: {selected_quote}")
- 
     st.stop()
  
+ 
 # =========================================================
-# SESSION STATE
+# NEW COSTING PAGE
 # =========================================================
  
 if "room_count" not in st.session_state:
@@ -548,9 +539,6 @@ def reset_all():
     st.session_state.room_items = {0: 1}
     st.session_state.reset_counter += 1
  
-# =========================================================
-# NEW COSTING PAGE
-# =========================================================
  
 st.subheader("1. Project Details")
  
@@ -566,18 +554,6 @@ with c3:
     gst_rate = st.number_input("GST %", min_value=0.0, max_value=20.0, value=10.0, step=0.5)
  
 st.divider()
- 
-room_options_map = {
-    "Residential": ["Kitchen", "Bathroom", "Laundry", "Bedroom", "Living Room", "Dining Room", "Hallway", "Garage", "Backyard", "Other"],
-    "Commercial": ["Tenancy Area", "Office", "Reception", "Meeting Room", "Kitchenette", "Bathroom", "Storage", "Shopfront", "Common Area", "Other"],
-    "Industrial": ["Warehouse Floor", "Racking Area", "Loading Bay", "Office Area", "Mezzanine", "Yard", "Concrete Area", "Storage Area", "Waste Area", "Other"],
-    "Shopping Centre": ["Tenancy Area", "Food Court", "Shopfront", "Kitchen", "Coolroom", "Common Area", "Back of House", "Storage", "Other"],
-    "Warehouse": ["Warehouse Floor", "Racking Area", "Office Area", "Loading Bay", "Mezzanine", "Yard", "Waste Area", "Other"],
-    "Other": ["Area 1", "Area 2", "Room", "External Area", "Internal Area", "Other"]
-}
- 
-room_options = room_options_map[project_type]
- 
 st.subheader("2. Rooms / Areas & Work Items")
  
 b1, b2, b3 = st.columns([1, 1, 4])
@@ -590,17 +566,16 @@ with b3:
  
 items = []
 categories = ["All"] + sorted(rates_df["category"].dropna().unique().tolist())
+room_options = get_room_options(project_type)
  
 for room_idx in range(st.session_state.room_count):
     room_key = f"{st.session_state.reset_counter}_{room_idx}"
     st.markdown(f"## Room / Area {room_idx + 1}")
- 
     r1, r2 = st.columns(2)
     with r1:
         selected_room = st.selectbox("Room / Area Type", room_options, key=f"room_type_{room_key}")
     with r2:
         custom_room_name = st.text_input("Custom Name (Optional)", key=f"custom_room_{room_key}")
- 
     room_name = custom_room_name.strip() if custom_room_name.strip() else selected_room
  
     a1, a2 = st.columns(2)
@@ -612,13 +587,10 @@ for room_idx in range(st.session_state.room_count):
     for item_idx in range(st.session_state.room_items[room_idx]):
         item_key = f"{room_key}_{item_idx}"
         st.markdown(f"### {room_name} - Item {item_idx + 1}")
- 
         x1, x2 = st.columns([1.2, 2])
         with x1:
             category_filter = st.selectbox("Category", categories, key=f"category_{item_key}")
- 
         filtered_df = rates_df if category_filter == "All" else rates_df[rates_df["category"] == category_filter]
- 
         with x2:
             selected_item = st.selectbox("Work Type", filtered_df["item"].tolist(), key=f"work_type_{item_key}")
  
@@ -628,13 +600,11 @@ for room_idx in range(st.session_state.room_count):
         item_lower = selected_item.lower()
  
         st.markdown("#### Measurement")
- 
         measurement_options = ["Manual Quantity"]
         if "wall" in item_lower or "partition" in item_lower:
             measurement_options.append("Wall Calculator (Total Length x Height)")
         if unit_lower in ["m2", "sqm", "sq m", "m²"]:
             measurement_options.append("Area Calculator (Length x Width)")
- 
         measurement_method = st.radio("Measurement Method", measurement_options, horizontal=True, key=f"measure_{item_key}")
  
         if measurement_method == "Wall Calculator (Total Length x Height)":
@@ -643,7 +613,6 @@ for room_idx in range(st.session_state.room_count):
                 total_wall_length = st.number_input("Total Wall Length (lm)", min_value=0.0, value=1.0, step=0.5, key=f"wall_length_{item_key}")
             with w2:
                 wall_height = st.number_input("Wall Height (m)", min_value=0.0, value=2.7, step=0.1, key=f"wall_height_{item_key}")
- 
             wall_area = total_wall_length * wall_height
             if unit_lower in ["lm", "linear metre", "linear meter"]:
                 quantity = total_wall_length
@@ -652,7 +621,6 @@ for room_idx in range(st.session_state.room_count):
                 quantity = wall_area
                 measurement_note = f"Wall area used for pricing: {quantity:.2f} m²."
             st.info(measurement_note)
- 
         elif measurement_method == "Area Calculator (Length x Width)":
             l1, l2 = st.columns(2)
             with l1:
@@ -662,7 +630,6 @@ for room_idx in range(st.session_state.room_count):
             quantity = length * width
             measurement_note = f"Area used for pricing: {quantity:.2f} m²."
             st.info(measurement_note)
- 
         else:
             quantity = st.number_input(f"Manual Quantity ({unit})", min_value=0.0, value=1.0, step=1.0, key=f"qty_{item_key}")
             measurement_note = f"Manual quantity used: {quantity:.2f} {unit}."
@@ -670,9 +637,7 @@ for room_idx in range(st.session_state.room_count):
         p1, p2, p3 = st.columns([1, 1, 2])
         with p1:
             your_rate = st.number_input(f"Your Rate per {unit}", min_value=0.0, value=float(row["market_recommended"]), step=5.0, key=f"rate_{item_key}")
- 
         item_total = quantity * your_rate
- 
         with p2:
             st.metric("Item Total", money(item_total))
         with p3:
@@ -682,7 +647,6 @@ for room_idx in range(st.session_state.room_count):
         market_rec = float(row["market_recommended"])
         market_high = float(row["market_high"])
         productivity = float(row["productivity_per_day"])
- 
         if your_rate < market_min:
             st.error(f"🚨 Below market minimum: {money(market_min)}/{unit}")
         elif market_min <= your_rate < market_rec:
@@ -700,20 +664,11 @@ for room_idx in range(st.session_state.room_count):
  
         notes = st.text_input("Item Notes", value=str(row["notes"]), key=f"notes_{item_key}")
         worker_days = quantity / productivity if productivity > 0 else 0
- 
         items.append({
-            "Room / Area": room_name,
-            "Item": selected_item,
-            "Category": row["category"],
-            "Unit": unit,
-            "Measurement Method": measurement_method,
-            "Quantity Used": quantity,
-            "Your Rate": your_rate,
-            "Total": item_total,
-            "Worker Days": worker_days,
-            "Notes": notes
+            "Room / Area": room_name, "Item": selected_item, "Category": row["category"], "Unit": unit,
+            "Measurement Method": measurement_method, "Quantity Used": quantity, "Your Rate": your_rate,
+            "Total": item_total, "Worker Days": worker_days, "Notes": notes
         })
- 
         st.divider()
  
 items_df = pd.DataFrame(items)
@@ -721,7 +676,6 @@ base_total = float(items_df["Total"].sum()) if not items_df.empty else 0
 total_worker_days = float(items_df["Worker Days"].sum()) if not items_df.empty else 0
  
 st.subheader("3. Labour & Estimated Duration")
- 
 l1, l2, l3, l4 = st.columns(4)
 with l1:
     labourers = st.number_input("Number of Labourers", min_value=1, value=2, step=1)
@@ -731,16 +685,13 @@ with l3:
     supervisor_days = st.number_input("Supervisor Days", min_value=0.0, value=0.0, step=0.5)
 with l4:
     supervisor_day_rate = st.number_input("Supervisor Cost / Day", min_value=0.0, value=550.0, step=25.0)
- 
 estimated_days = total_worker_days / labourers if labourers > 0 else 0
 rounded_days = ceil(estimated_days) if estimated_days > 0 else 0
 labour_cost = rounded_days * labourers * labourer_day_rate
 supervisor_cost = supervisor_days * supervisor_day_rate
- 
 st.info(f"Estimated labour duration: {estimated_days:.2f} days ({rounded_days} rounded day/s)")
  
 st.subheader("4. Extra Costs")
- 
 e1, e2, e3, e4 = st.columns(4)
 with e1:
     equipment_cost = st.number_input("Equipment Cost", min_value=0.0, value=0.0, step=100.0)
@@ -752,59 +703,29 @@ with e4:
     other_cost = st.number_input("Other Cost", min_value=0.0, value=0.0, step=100.0)
  
 st.divider()
- 
 st.subheader("5. Difficulty & Access Multipliers")
- 
 default_multipliers = {
-    "Lift Access": 10.0,
-    "Stairs Access": 15.0,
-    "CBD Location": 15.0,
-    "Shopping Centre": 20.0,
-    "After Hours": 25.0,
-    "Weekend Works": 30.0,
-    "Rooftop Access": 40.0,
-    "Manual Handling": 10.0,
-    "Restricted Access": 15.0,
-    "Heavy Concrete": 25.0,
-    "High Dust Environment": 10.0,
-    "Live / Occupied Site": 15.0,
+    "Lift Access": 10.0, "Stairs Access": 15.0, "CBD Location": 15.0, "Shopping Centre": 20.0,
+    "After Hours": 25.0, "Weekend Works": 30.0, "Rooftop Access": 40.0, "Manual Handling": 10.0,
+    "Restricted Access": 15.0, "Heavy Concrete": 25.0, "High Dust Environment": 10.0, "Live / Occupied Site": 15.0
 }
- 
 selected_multiplier_total = 0.0
 multiplier_rows = []
 cols = st.columns(3)
- 
 for idx, (name, default_pct) in enumerate(default_multipliers.items()):
     with cols[idx % 3]:
         checked = st.checkbox(name, value=False, key=f"check_{name}")
-        pct_value = st.number_input(
-            f"{name} %",
-            min_value=0.0,
-            max_value=100.0,
-            value=default_pct,
-            step=1.0,
-            disabled=not checked,
-            key=f"pct_{name}"
-        )
+        pct = st.number_input(f"{name} %", min_value=0.0, max_value=100.0, value=default_pct, step=1.0, disabled=not checked, key=f"pct_{name}")
         if checked:
-            selected_multiplier_total += pct_value
-            multiplier_rows.append({"Condition": name, "Percent": pct_value})
- 
+            selected_multiplier_total += pct
+            multiplier_rows.append({"Condition": name, "Percent": pct})
 use_custom = st.checkbox("Custom Extra %", value=False)
-custom_pct = st.number_input(
-    "Custom Difficulty / Risk %",
-    min_value=0.0,
-    max_value=100.0,
-    value=0.0,
-    step=1.0,
-    disabled=not use_custom
-)
+custom_pct = st.number_input("Custom Difficulty / Risk %", min_value=0.0, max_value=100.0, value=0.0, step=1.0, disabled=not use_custom)
 if use_custom:
     selected_multiplier_total += custom_pct
     multiplier_rows.append({"Condition": "Custom Extra", "Percent": custom_pct})
  
 st.subheader("6. Margin & Final Price")
- 
 g1, g2, g3 = st.columns(3)
 with g1:
     minimum_margin = st.number_input("Minimum Margin %", min_value=0.0, max_value=80.0, value=20.0, step=1.0)
@@ -824,19 +745,16 @@ recommended_inc_gst = recommended_price + recommended_gst
  
 st.divider()
 st.subheader("7. Pricing Summary")
- 
 s1, s2, s3, s4 = st.columns(4)
 s1.metric("Base Work Items", money(base_total))
 s2.metric("Labour Cost", money(labour_cost))
 s3.metric("Difficulty %", f"{selected_multiplier_total:.1f}%")
 s4.metric("Difficulty Allowance", money(difficulty_allowance))
- 
 s5, s6, s7, s8 = st.columns(4)
 s5.metric("Direct Cost", money(direct_cost))
 s6.metric("Cost + Difficulty", money(cost_with_difficulty))
 s7.metric("Recommended + GST", money(recommended_price))
 s8.metric("Total Inc GST", money(recommended_inc_gst))
- 
 st.markdown("### Suggested Prices")
 q1, q2, q3 = st.columns(3)
 q1.success(f"Minimum Safe Price: **{money(minimum_price)} + GST**")
@@ -844,7 +762,6 @@ q2.info(f"Recommended Price: **{money(recommended_price)} + GST**")
 q3.warning(f"Premium Price: **{money(premium_price)} + GST**")
  
 st.markdown("### Work Item Breakdown")
- 
 display_df = items_df.copy()
 if not display_df.empty:
     display_df["Your Rate"] = display_df["Your Rate"].apply(money)
@@ -852,13 +769,11 @@ if not display_df.empty:
     display_df["Quantity Used"] = display_df["Quantity Used"].map(lambda x: f"{float(x):.2f}")
     display_df["Worker Days"] = display_df["Worker Days"].map(lambda x: f"{float(x):.2f}")
     st.dataframe(display_df, use_container_width=True)
- 
 if multiplier_rows:
     st.markdown("### Selected Multipliers")
     st.dataframe(pd.DataFrame(multiplier_rows), use_container_width=True)
  
 st.markdown("### Copy Summary")
- 
 summary_text = f"""
 Project: {client_name or 'TBC'}
 Address: {project_address or 'TBC'}
@@ -881,64 +796,27 @@ Premium Price: {money(premium_price)} + GST
  
 Recommended GST: {money(recommended_gst)}
 Recommended Total Inc GST: {money(recommended_inc_gst)}
-Estimated Worker Days: {total_worker_days:.2f}
-Labourers: {labourers}
 Estimated Duration: {estimated_days:.2f} days ({rounded_days} rounded day/s)
 """
- 
 st.text_area("Copy Summary", value=summary_text.strip(), height=320)
  
 st.markdown("## Save Costing")
- 
 if st.button("💾 Save Costing to Google Sheets"):
     if items_df.empty:
         st.warning("No work items to save.")
     else:
-        try:
-            ws = connect_google_sheet()
-            quote_id = f"Q-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            now = datetime.now().strftime("%d/%m/%Y %H:%M")
-            rows = []
- 
-            for _, row in items_df.iterrows():
-                rows.append([
-                    str(quote_id),
-                    str(now),
-                    str(client_name),
-                    str(project_address),
-                    str(project_type),
-                    str(working_hours),
-                    str(floor_level),
-                    str(row["Room / Area"]),
-                    str(row["Item"]),
-                    str(row["Category"]),
-                    str(row["Unit"]),
-                    str(row["Measurement Method"]),
-                    round(float(row["Quantity Used"]), 2),
-                    money(row["Your Rate"]),
-                    money(row["Total"]),
-                    round(float(row["Worker Days"]), 2),
-                    money(equipment_cost),
-                    money(disposal_cost),
-                    money(truck_cost),
-                    money(other_cost),
-                    f"{float(selected_multiplier_total):.1f}%",
-                    money(difficulty_allowance),
-                    money(labour_cost),
-                    money(supervisor_cost),
-                    money(direct_cost),
-                    money(recommended_price),
-                    money(recommended_gst),
-                    money(recommended_inc_gst),
-                    str(row["Notes"]),
-                    int(labourers),
-                    round(total_worker_days, 2),
-                    round(estimated_days, 2),
-                    int(rounded_days)
-                ])
- 
-            ws.append_rows(rows, value_input_option="RAW")
-            st.success(f"✅ Costing saved successfully. Quote ID: {quote_id}")
-        except Exception as e:
-            st.error("Could not save costing to Google Sheets.")
-            st.exception(e)
+        ws = connect_google_sheet()
+        quote_id = f"Q-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        rows = []
+        for _, row in items_df.iterrows():
+            rows.append([
+                str(quote_id), str(now), str(client_name), str(project_address), str(project_type), str(working_hours),
+                str(floor_level), str(row["Room / Area"]), str(row["Item"]), str(row["Category"]), str(row["Unit"]),
+                str(row["Measurement Method"]), round(float(row["Quantity Used"]), 2), money(row["Your Rate"]), money(row["Total"]),
+                round(float(row["Worker Days"]), 2), money(equipment_cost), money(disposal_cost), money(truck_cost), money(other_cost),
+                f"{float(selected_multiplier_total):.1f}%", money(difficulty_allowance), money(labour_cost), money(supervisor_cost),
+                money(direct_cost), money(recommended_price), money(recommended_gst), money(recommended_inc_gst), str(row["Notes"])
+            ])
+        ws.append_rows(rows, value_input_option="RAW")
+        st.success(f"✅ Costing saved successfully. Quote ID: {quote_id}")
