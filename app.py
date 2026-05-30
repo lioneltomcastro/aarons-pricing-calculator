@@ -61,12 +61,21 @@ page = st.sidebar.radio(
         "New Costing",
         "Saved Costings",
         "Manager View",
-        "Edit Costing"
+        "Edit Costing",
+        "Attendance Register",
+        "Payroll Report"
     ]
 )
 
 st.title("🧾 Aaron's Pricing Calculator")
 st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
+if page == "Attendance Register":
+    attendance_page()
+    st.stop()
+
+if page == "Payroll Report":
+    payroll_page()
+    st.stop()
 
 # =========================================================
 # HELPERS
