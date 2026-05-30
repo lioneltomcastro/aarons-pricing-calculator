@@ -234,14 +234,28 @@ def build_payroll_email_html(report_df, selected_label, total_hours, total_pay):
     """
 
 
+def get_secret_value(key, default=""):
+    # First checks normal top-level Streamlit secrets.
+    value = st.secrets.get(key, default)
+
+    # If email secrets were pasted after [gcp_service_account], TOML stores them inside that block.
+    if (value == default or value is None or value == "") and "gcp_service_account" in st.secrets:
+        value = st.secrets["gcp_service_account"].get(key, default)
+
+    return value
+
+
 def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachment_filename):
-    sender = st.secrets.get("EMAIL_SENDER", "")
-    password = st.secrets.get("EMAIL_PASSWORD", "")
-    smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+    sender = str(get_secret_value("EMAIL_SENDER", "")).strip()
+    password = str(get_secret_value("EMAIL_PASSWORD", "")).replace(" ", "").strip()
+    smtp_server = str(get_secret_value("SMTP_SERVER", "smtp.gmail.com")).strip()
+    smtp_port = int(get_secret_value("SMTP_PORT", 587))
 
     if not sender or not password:
-        raise ValueError("Missing EMAIL_SENDER or EMAIL_PASSWORD in Streamlit Secrets.")
+        raise ValueError(
+            "Missing EMAIL_SENDER or EMAIL_PASSWORD in Streamlit Secrets. "
+            "Add them as top-level keys, or the app will also read them from [gcp_service_account] if pasted there."
+        )
 
     msg = MIMEMultipart()
     msg["From"] = sender
