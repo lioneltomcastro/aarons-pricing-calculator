@@ -4,7 +4,6 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from math import ceil
-from attendance import attendance_page, payroll_page
 
 # =========================================================
 # CONFIG
@@ -52,6 +51,252 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# =========================================================
+# ATTENDANCE & PAYROLL HELPERS
+# =========================================================
+
+WORKERS_SHEET_NAME = "Workers"
+ATTENDANCE_SHEET_NAME = "Attendance"
+WORKERS_HEADERS = ["Name", "Rate", "BSB", "Account"]
+ATTENDANCE_HEADERS = ["Timestamp", "Date", "Name", "Project", "Action"]
+
+
+def connect_spreadsheet():
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"],
+        scopes=scopes
+    )
+
+    client = gspread.authorize(creds)
+    return client.open(SPREADSHEET_NAME)
+
+
+def get_or_create_worksheet(spreadsheet, sheet_name, headers):
+    try:
+        ws = spreadsheet.worksheet(sheet_name)
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(
+            title=sheet_name,
+            rows="2000",
+            cols=str(len(headers) + 5)
+        )
+        ws.append_row(headers, value_input_option="RAW")
+        return ws
+
+    values = ws.get_all_values()
+    if not values:
+        ws.append_row(headers, value_input_option="RAW")
+
+    return ws
+
+
+def attendance_page():
+    st.title("👷 Aaron's Attendance Register")
+    st.caption("Workers can register check in and check out from this page.")
+
+    try:
+        spreadsheet = connect_spreadsheet()
+        workers_ws = get_or_create_worksheet(spreadsheet, WORKERS_SHEET_NAME, WORKERS_HEADERS)
+        attendance_ws = get_or_create_worksheet(spreadsheet, ATTENDANCE_SHEET_NAME, ATTENDANCE_HEADERS)
+    except Exception as e:
+        st.error("Could not connect to Google Sheets.")
+        st.exception(e)
+        return
+
+    workers_data = workers_ws.get_all_records()
+
+    if not workers_data:
+        st.warning("Please add workers first in the Workers sheet.")
+        st.info("The Workers sheet needs these columns: Name, Rate, BSB, Account")
+        return
+
+    worker_names = [str(w.get("Name", "")).strip() for w in workers_data if str(w.get("Name", "")).strip()]
+
+    if not worker_names:
+        st.warning("No worker names found in the Workers sheet.")
+        return
+
+    name = st.selectbox("Worker Name", worker_names)
+    project = st.text_input("Project / Site", value="Carlton")
+    action = st.radio("Attendance Type", ["Check In", "Check Out"], horizontal=True)
+
+    if st.button("✅ Register Attendance", use_container_width=True):
+        now = datetime.now()
+
+        attendance_ws.append_row([
+            now.strftime("%Y-%m-%d %H:%M:%S"),
+            now.strftime("%Y-%m-%d"),
+            name,
+            project,
+            action
+        ], value_input_option="RAW")
+
+        st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')}.")
+
+
+def payroll_page():
+    st.title("💵 Weekly Payroll Report")
+    st.caption("Calculate weekly hours and payment from Attendance records.")
+
+    try:
+        spreadsheet = connect_spreadsheet()
+        workers_ws = get_or_create_worksheet(spreadsheet, WORKERS_SHEET_NAME, WORKERS_HEADERS)
+        attendance_ws = get_or_create_worksheet(spreadsheet, ATTENDANCE_SHEET_NAME, ATTENDANCE_HEADERS)
+    except Exception as e:
+        st.error("Could not connect to Google Sheets.")
+        st.exception(e)
+        return
+
+    workers = pd.DataFrame(workers_ws.get_all_records())
+    attendance = pd.DataFrame(attendance_ws.get_all_records())
+
+    if workers.empty:
+        st.warning("No workers found. Add workers in the Workers sheet first.")
+        return
+
+    if attendance.empty:
+        st.warning("No attendance records yet.")
+        return
+
+    required_cols = ["Timestamp", "Date", "Name", "Project", "Action"]
+    missing_cols = [c for c in required_cols if c not in attendance.columns]
+    if missing_cols:
+        st.error(f"Missing columns in Attendance sheet: {missing_cols}")
+        return
+
+    attendance["Timestamp"] = pd.to_datetime(attendance["Timestamp"], errors="coerce")
+    attendance["Date"] = pd.to_datetime(attendance["Date"], errors="coerce")
+    attendance = attendance.dropna(subset=["Timestamp", "Date"])
+
+    today = datetime.now().date()
+    start_week = today - timedelta(days=today.weekday())
+    end_week = start_week + timedelta(days=6)
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        start_date = st.date_input("Start Date", start_week)
+
+    with c2:
+        end_date = st.date_input("End Date", end_week)
+
+    with c3:
+        lunch_break = st.number_input("Lunch Break per Day (hours)", min_value=0.0, max_value=2.0, value=0.5, step=0.25)
+
+    filtered = attendance[
+        (attendance["Date"].dt.date >= start_date) &
+        (attendance["Date"].dt.date <= end_date)
+    ].copy()
+
+    if filtered.empty:
+        st.warning("No attendance records found for this date range.")
+        return
+
+    results = []
+    daily_rows = []
+
+    for name in sorted(filtered["Name"].dropna().astype(str).unique()):
+        worker_records = filtered[filtered["Name"].astype(str) == name].sort_values("Timestamp")
+        total_normal_hours = 0.0
+        total_sunday_hours = 0.0
+
+        for work_date in sorted(worker_records["Date"].dt.date.unique()):
+            day_records = worker_records[worker_records["Date"].dt.date == work_date].sort_values("Timestamp")
+
+            check_in = day_records[day_records["Action"] == "Check In"]["Timestamp"]
+            check_out = day_records[day_records["Action"] == "Check Out"]["Timestamp"]
+
+            if check_in.empty or check_out.empty:
+                daily_rows.append({
+                    "Worker": name,
+                    "Date": work_date.strftime("%d/%m/%Y"),
+                    "Check In": "Missing",
+                    "Check Out": "Missing",
+                    "Hours": 0,
+                    "Note": "Missing check in or check out"
+                })
+                continue
+
+            start = check_in.iloc[0]
+            end = check_out.iloc[-1]
+            hours = (end - start).total_seconds() / 3600
+            hours = max(hours - lunch_break, 0)
+
+            if work_date.weekday() == 6:
+                total_sunday_hours += hours
+                note = "Sunday +50%"
+            else:
+                total_normal_hours += hours
+                note = "Normal"
+
+            daily_rows.append({
+                "Worker": name,
+                "Date": work_date.strftime("%d/%m/%Y"),
+                "Check In": start.strftime("%I:%M %p"),
+                "Check Out": end.strftime("%I:%M %p"),
+                "Hours": round(hours, 2),
+                "Note": note
+            })
+
+        worker_row = workers[workers["Name"].astype(str) == name]
+        rate = 35.0
+        bsb = ""
+        account = ""
+
+        if not worker_row.empty:
+            rate = float(pd.to_numeric(worker_row.iloc[0].get("Rate", 35), errors="coerce") or 35)
+            bsb = str(worker_row.iloc[0].get("BSB", ""))
+            account = str(worker_row.iloc[0].get("Account", ""))
+
+        normal_pay = total_normal_hours * rate
+        sunday_pay = total_sunday_hours * rate * 1.5
+        total_hours = total_normal_hours + total_sunday_hours
+        total_pay = normal_pay + sunday_pay
+
+        results.append({
+            "Worker": name,
+            "Normal Hours": round(total_normal_hours, 2),
+            "Sunday Hours": round(total_sunday_hours, 2),
+            "Total Hours": round(total_hours, 2),
+            "Rate": round(rate, 2),
+            "Total Pay": round(total_pay, 2),
+            "BSB": bsb,
+            "Account": account
+        })
+
+    report = pd.DataFrame(results)
+    daily_report = pd.DataFrame(daily_rows)
+
+    st.markdown("### Payroll Summary")
+    st.dataframe(report, use_container_width=True, hide_index=True)
+
+    st.markdown("### Daily Breakdown")
+    st.dataframe(daily_report, use_container_width=True, hide_index=True)
+
+    st.subheader("Payment Message for Aaron")
+
+    message = "Hi Aaron, I’m sending you this week’s payroll details:\n\n"
+
+    for _, row in report.iterrows():
+        message += f"{row['Worker']}\n"
+        message += f"Normal hours: {row['Normal Hours']}\n"
+        message += f"Sunday hours (+50%): {row['Sunday Hours']}\n"
+        message += f"Total hours: {row['Total Hours']}\n"
+        message += f"Rate: ${row['Rate']} per hour\n"
+        message += f"Total: ${row['Total Pay']}\n"
+        if str(row.get('BSB', '')).strip() or str(row.get('Account', '')).strip():
+            message += f"BSB: {row.get('BSB', '')}\n"
+            message += f"Account: {row.get('Account', '')}\n"
+        message += "\n"
+
+    st.text_area("Copy this message", message.strip(), height=350)
+
 # =========================================================
 # SIDEBAR NAVIGATION
 # =========================================================
@@ -70,6 +315,7 @@ page = st.sidebar.radio(
 
 st.title("🧾 Aaron's Pricing Calculator")
 st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
+
 if page == "Attendance Register":
     attendance_page()
     st.stop()
