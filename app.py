@@ -93,10 +93,15 @@ def connect_spreadsheet():
     return client.open(SPREADSHEET_NAME)
 
 
-def get_or_create_worksheet(spreadsheet, sheet_name, headers):
-    """Create the worksheet if missing and keep expected headers available."""
+@st.cache_resource(show_spinner=False)
+def get_worksheet_cached(sheet_name, headers_tuple):
+    """Cache worksheet objects so the app does not hit Google Sheets metadata on every page load.
+    IMPORTANT: Create the tabs once with the correct headers; this function only creates them if missing.
+    """
+    spreadsheet = connect_spreadsheet()
+    headers = list(headers_tuple)
     try:
-        ws = spreadsheet.worksheet(sheet_name)
+        return spreadsheet.worksheet(sheet_name)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(
             title=sheet_name,
@@ -106,21 +111,13 @@ def get_or_create_worksheet(spreadsheet, sheet_name, headers):
         ws.append_row(headers, value_input_option="RAW")
         return ws
 
-    values = ws.get_all_values()
-    if not values:
-        ws.append_row(headers, value_input_option="RAW")
-        return ws
 
-    current_headers = values[0]
-    missing_headers = [h for h in headers if h not in current_headers]
-    if missing_headers:
-        updated_headers = current_headers + missing_headers
-        ws.update("A1", [updated_headers], value_input_option="RAW")
-
-    return ws
+def get_or_create_worksheet(spreadsheet, sheet_name, headers):
+    """Backward-compatible wrapper. Uses cached worksheet objects to avoid Google Sheets 429 quota errors."""
+    return get_worksheet_cached(sheet_name, tuple(headers))
 
 
-@st.cache_data(ttl=60, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_sheet_records_cached(sheet_name, headers_tuple):
     """Read records from Google Sheets with a short cache to avoid Google API 429 quota errors."""
     spreadsheet = connect_spreadsheet()
@@ -375,7 +372,6 @@ def attendance_page():
                 lon,
                 location_link
             ], value_input_option="RAW")
-            clear_sheet_cache()
 
             st.success(f"{action} registered for {full_name} at {now.strftime('%I:%M %p')}.")
 
@@ -405,7 +401,6 @@ def attendance_page():
                 lon,
                 location_link
             ], value_input_option="RAW")
-            clear_sheet_cache()
 
             st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')}.")
 
