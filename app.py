@@ -353,9 +353,9 @@ def attendance_page():
                 workers_ws.append_row([
                     full_name,
                     35,
-                    0,
                     bsb.strip(),
                     account.strip(),
+                    0,
                     "Yes"
                 ], value_input_option="RAW")
                 clear_sheet_cache()
