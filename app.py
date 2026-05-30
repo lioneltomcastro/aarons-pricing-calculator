@@ -77,6 +77,7 @@ PROJECTS_HEADERS = ["Project", "Active"]
 ATTENDANCE_ACTIONS = ["Check In", "Lunch Start", "Lunch End", "Check Out"]
 
 
+@st.cache_resource(show_spinner=False)
 def connect_spreadsheet():
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
@@ -119,8 +120,24 @@ def get_or_create_worksheet(spreadsheet, sheet_name, headers):
     return ws
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def get_sheet_records_cached(sheet_name, headers_tuple):
+    """Read records from Google Sheets with a short cache to avoid Google API 429 quota errors."""
+    spreadsheet = connect_spreadsheet()
+    ws = get_or_create_worksheet(spreadsheet, sheet_name, list(headers_tuple))
+    return ws.get_all_records()
+
+
+def clear_sheet_cache():
+    """Clear cached sheet reads after writing new rows."""
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
 def get_project_options(projects_ws):
-    projects = projects_ws.get_all_records()
+    projects = get_sheet_records_cached(PROJECTS_SHEET_NAME, tuple(PROJECTS_HEADERS))
     active_projects = []
 
     for project in projects:
@@ -286,7 +303,7 @@ def attendance_page():
         st.exception(e)
         return
 
-    workers_data = workers_ws.get_all_records()
+    workers_data = get_sheet_records_cached(WORKERS_SHEET_NAME, tuple(WORKERS_HEADERS))
     worker_names = [clean_text(w.get("Name", "")) for w in workers_data if clean_text(w.get("Name", ""))]
 
     register_type = st.radio(
@@ -344,6 +361,7 @@ def attendance_page():
                     account.strip(),
                     "Yes"
                 ], value_input_option="RAW")
+                clear_sheet_cache()
             else:
                 st.info("This worker already exists. Bank details were not duplicated.")
 
@@ -357,6 +375,7 @@ def attendance_page():
                 lon,
                 location_link
             ], value_input_option="RAW")
+            clear_sheet_cache()
 
             st.success(f"{action} registered for {full_name} at {now.strftime('%I:%M %p')}.")
 
@@ -386,6 +405,7 @@ def attendance_page():
                 lon,
                 location_link
             ], value_input_option="RAW")
+            clear_sheet_cache()
 
             st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')}.")
 
@@ -426,8 +446,8 @@ def payroll_page():
         st.exception(e)
         return
 
-    workers = pd.DataFrame(workers_ws.get_all_records())
-    attendance = pd.DataFrame(attendance_ws.get_all_records())
+    workers = pd.DataFrame(get_sheet_records_cached(WORKERS_SHEET_NAME, tuple(WORKERS_HEADERS)))
+    attendance = pd.DataFrame(get_sheet_records_cached(ATTENDANCE_SHEET_NAME, tuple(ATTENDANCE_HEADERS)))
 
     if workers.empty:
         st.warning("No workers found. Workers must register first from the QR page.")
@@ -704,7 +724,7 @@ def projects_page():
         st.exception(e)
         return
 
-    projects = pd.DataFrame(projects_ws.get_all_records())
+    projects = pd.DataFrame(get_sheet_records_cached(PROJECTS_SHEET_NAME, tuple(PROJECTS_HEADERS)))
     if projects.empty:
         projects = pd.DataFrame(columns=PROJECTS_HEADERS)
 
