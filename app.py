@@ -4,6 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from math import ceil
+from attendance import attendance_page, payroll_page
 
 # =========================================================
 # CONFIG
