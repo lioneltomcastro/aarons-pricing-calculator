@@ -4,7 +4,16 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 from math import ceil
-from urllib.parse import quote
+from io import BytesIO
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
+
+try:
+    from streamlit_js_eval import get_geolocation
+except Exception:
+    get_geolocation = None
 
 # =========================================================
 # CONFIG
@@ -63,7 +72,7 @@ PROJECTS_SHEET_NAME = "Projects"
 
 # Workers register bank details once. Rates can be edited manually later in Google Sheets.
 WORKERS_HEADERS = ["Name", "Rate", "Sunday Rate", "BSB", "Account", "Active"]
-ATTENDANCE_HEADERS = ["Timestamp", "Date", "Name", "Project", "Action"]
+ATTENDANCE_HEADERS = ["Timestamp", "Date", "Name", "Project", "Action", "Latitude", "Longitude", "Location Link"]
 PROJECTS_HEADERS = ["Project", "Active"]
 ATTENDANCE_ACTIONS = ["Check In", "Lunch Start", "Lunch End", "Check Out"]
 
@@ -148,6 +157,107 @@ def safe_float(value, default=0.0):
         return default
 
 
+
+def get_current_location():
+    """Ask the phone/browser for GPS location and return lat, lon and Google Maps link."""
+    if get_geolocation is None:
+        return "", "", ""
+
+    try:
+        location = get_geolocation()
+        if not location or "coords" not in location:
+            return "", "", ""
+
+        coords = location.get("coords", {})
+        lat = coords.get("latitude", "")
+        lon = coords.get("longitude", "")
+
+        if lat == "" or lon == "":
+            return "", "", ""
+
+        maps_link = f"https://www.google.com/maps?q={lat},{lon}"
+        return lat, lon, maps_link
+    except Exception:
+        return "", "", ""
+
+
+def make_payroll_excel(summary_df, daily_df, selected_label):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        summary_df.to_excel(writer, sheet_name="Payroll Summary", index=False, startrow=3)
+        daily_df.to_excel(writer, sheet_name="Daily Breakdown", index=False)
+
+        ws = writer.book["Payroll Summary"]
+        ws["A1"] = "Aaron's Demolition - Weekly Payroll Report"
+        ws["A2"] = f"Week: {selected_label}"
+
+        for sheet_name in writer.book.sheetnames:
+            ws2 = writer.book[sheet_name]
+            for col in ws2.columns:
+                max_len = 0
+                col_letter = col[0].column_letter
+                for cell in col:
+                    try:
+                        max_len = max(max_len, len(str(cell.value)))
+                    except Exception:
+                        pass
+                ws2.column_dimensions[col_letter].width = min(max_len + 2, 35)
+
+    output.seek(0)
+    return output.getvalue()
+
+
+def build_payroll_email_html(report_df, selected_label, total_hours, total_pay):
+    email_df = report_df.copy()
+    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
+        if col in email_df.columns:
+            email_df[col] = email_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
+
+    html_table = email_df.to_html(index=False, border=1, justify="center")
+
+    return f"""
+    <html>
+    <body>
+        <p>Hi Aaron,</p>
+        <p>Please find below the payroll summary for the week <b>{selected_label}</b>.</p>
+        {html_table}
+        <p><b>Summary</b></p>
+        <p>
+            Total Workers: {len(report_df)}<br>
+            Total Payable Hours: {total_hours:,.2f}<br>
+            Total Payroll: AUD {total_pay:,.2f}
+        </p>
+        <p>The detailed payroll report is attached for your records.</p>
+        <p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
+    </body>
+    </html>
+    """
+
+
+def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachment_filename):
+    sender = st.secrets.get("EMAIL_SENDER", "")
+    password = st.secrets.get("EMAIL_PASSWORD", "")
+    smtp_server = st.secrets.get("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+
+    if not sender or not password:
+        raise ValueError("Missing EMAIL_SENDER or EMAIL_PASSWORD in Streamlit Secrets.")
+
+    msg = MIMEMultipart()
+    msg["From"] = sender
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html_body, "html"))
+
+    attachment = MIMEApplication(attachment_bytes, _subtype="xlsx")
+    attachment.add_header("Content-Disposition", "attachment", filename=attachment_filename)
+    msg.attach(attachment)
+
+    with smtplib.SMTP(smtp_server, smtp_port) as server:
+        server.starttls()
+        server.login(sender, password)
+        server.send_message(msg)
+
 def attendance_page():
     st.title("👷 Aaron's Attendance Register")
     st.caption("Scan the QR, register once, then always mark attendance under your own name.")
@@ -172,6 +282,14 @@ def attendance_page():
     )
 
     project = project_picker(projects_ws)
+
+    st.markdown("### Location")
+    lat, lon, location_link = get_current_location()
+    if location_link:
+        st.success("Location detected automatically.")
+        st.caption(location_link)
+    else:
+        st.warning("Please allow location permission on your phone/browser before submitting attendance.")
 
     if register_type == "First time registration":
         st.markdown("### Worker Details")
@@ -220,7 +338,10 @@ def attendance_page():
                 now.strftime("%Y-%m-%d"),
                 full_name,
                 project,
-                action
+                action,
+                lat,
+                lon,
+                location_link
             ], value_input_option="RAW")
 
             st.success(f"{action} registered for {full_name} at {now.strftime('%I:%M %p')}.")
@@ -246,7 +367,10 @@ def attendance_page():
                 now.strftime("%Y-%m-%d"),
                 name,
                 project,
-                action
+                action,
+                lat,
+                lon,
+                location_link
             ], value_input_option="RAW")
 
             st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')}.")
@@ -440,62 +564,118 @@ def payroll_page():
     report = pd.DataFrame(results)
     daily_report = pd.DataFrame(daily_rows)
 
-    total_workers = len(report)
-    total_hours = report["Total Hours"].sum() if not report.empty else 0
-    total_pay = report["Total Pay"].sum() if not report.empty else 0
+    st.markdown("### Worker Selection")
+    report_type = st.radio(
+        "Report Type",
+        ["All workers", "Selected workers only"],
+        horizontal=True
+    )
+
+    if report_type == "Selected workers only":
+        selected_workers = st.multiselect(
+            "Select workers to include",
+            report["Name"].tolist(),
+            default=report["Name"].tolist()
+        )
+        report = report[report["Name"].isin(selected_workers)].copy()
+        daily_report = daily_report[daily_report["Worker"].isin(selected_workers)].copy()
+
+    if report.empty:
+        st.warning("No workers selected for this report.")
+        return
+
+    if "Adjustment AUD" not in report.columns:
+        report["Adjustment AUD"] = 0.0
+
+    st.markdown("### Weekly Payroll Summary")
+    st.caption("You can manually edit Rate, Sunday Rate and Adjustment AUD before downloading or sending the report.")
+
+    editable_report = st.data_editor(
+        report,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="fixed",
+        column_config={
+            "Name": st.column_config.TextColumn("Name", disabled=True),
+            "BSB": st.column_config.TextColumn("BSB", disabled=True),
+            "Account": st.column_config.TextColumn("Account", disabled=True),
+            "Normal Hours": st.column_config.NumberColumn("Normal Hours", disabled=True, format="%.2f"),
+            "Sunday Hours": st.column_config.NumberColumn("Sunday Hours", disabled=True, format="%.2f"),
+            "Total Hours": st.column_config.NumberColumn("Total Hours", disabled=True, format="%.2f"),
+            "Lunch Deducted": st.column_config.NumberColumn("Lunch Deducted", disabled=True, format="%.2f"),
+            "Rate": st.column_config.NumberColumn("Rate", min_value=0.0, step=1.0, format="%.2f"),
+            "Sunday Rate": st.column_config.NumberColumn("Sunday Rate", min_value=0.0, step=1.0, format="%.2f"),
+            "Adjustment AUD": st.column_config.NumberColumn("Adjustment AUD", step=10.0, format="%.2f"),
+            "Total Pay": st.column_config.NumberColumn("Total Pay", disabled=True, format="%.2f"),
+        },
+        key="weekly_payroll_editor"
+    )
+
+    for col in ["Normal Hours", "Sunday Hours", "Rate", "Sunday Rate", "Adjustment AUD"]:
+        editable_report[col] = pd.to_numeric(editable_report[col], errors="coerce").fillna(0)
+
+    editable_report["Total Hours"] = editable_report["Normal Hours"] + editable_report["Sunday Hours"]
+    editable_report["Total Pay"] = (
+        editable_report["Normal Hours"] * editable_report["Rate"]
+        + editable_report["Sunday Hours"] * editable_report["Sunday Rate"]
+        + editable_report["Adjustment AUD"]
+    ).round(2)
+
+    total_workers = len(editable_report)
+    total_hours = editable_report["Total Hours"].sum() if not editable_report.empty else 0
+    total_pay = editable_report["Total Pay"].sum() if not editable_report.empty else 0
 
     m1, m2, m3 = st.columns(3)
     m1.metric("Workers", total_workers)
-    m2.metric("Total Hours", f"{total_hours:.2f}")
-    m3.metric("Total Labour Cost", f"AUD {total_pay:,.2f}")
+    m2.metric("Total Payable Hours", f"{total_hours:.2f}")
+    m3.metric("Total Payroll", f"AUD {total_pay:,.2f}")
 
-    st.markdown("### Weekly Payroll Summary")
-    st.dataframe(report, use_container_width=True, hide_index=True)
+    st.markdown("### Final Report Preview")
+    st.dataframe(editable_report, use_container_width=True, hide_index=True)
 
     st.markdown("### Daily Attendance Breakdown")
     st.dataframe(daily_report, use_container_width=True, hide_index=True)
 
-    st.subheader("Payment Report for Aaron")
+    payroll_filename = f"payroll_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
+    excel_bytes = make_payroll_excel(editable_report, daily_report, selected_label)
+    html_body = build_payroll_email_html(editable_report, selected_label, total_hours, total_pay)
 
-    message = f"Hi Aaron, I’m sending you the payroll details for {selected_label}:\n\n"
+    st.markdown("### Download or Email Payroll Report")
+    col_download, col_email = st.columns(2)
 
-    for _, row in report.iterrows():
-        message += f"{row['Name']}\n"
-        message += f"BSB: {row['BSB']}\n"
-        message += f"Account: {row['Account']}\n"
-        message += f"Normal hours: {row['Normal Hours']}\n"
-        message += f"Sunday hours: {row['Sunday Hours']}\n"
-        message += f"Total payable hours: {row['Total Hours']}\n"
-        message += f"Lunch deducted: {row['Lunch Deducted']} hours\n"
-        message += f"Rate: ${row['Rate']} per hour\n"
-        message += f"Sunday rate: ${row['Sunday Rate']} per hour\n"
-        message += f"Total to pay: ${row['Total Pay']}\n\n"
-
-    message += f"Total labour cost: AUD {total_pay:,.2f}"
-
-    st.text_area("Copy this report", message.strip(), height=380)
-
-    st.markdown("### Email Report")
-    email_to = st.text_input("Send report to", value="")
-    email_subject = f"Weekly Payroll Report - {selected_label}"
-
-    if email_to.strip():
-        mailto_link = (
-            f"mailto:{email_to.strip()}"
-            f"?subject={quote(email_subject)}"
-            f"&body={quote(message.strip())}"
+    with col_download:
+        st.download_button(
+            "⬇️ Download Payroll Report Excel",
+            data=excel_bytes,
+            file_name=payroll_filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
-        st.markdown(f"[📧 Open Email Draft]({mailto_link})")
 
-    csv_data = report.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇️ Download Weekly Payroll CSV",
-        data=csv_data,
-        file_name=f"payroll_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv",
-        mime="text/csv",
-        use_container_width=True
-    )
+    with col_email:
+        default_receiver = st.secrets.get("EMAIL_RECEIVER", "")
+        email_to = st.text_input("Send payroll to", value=default_receiver)
+        email_subject = st.text_input("Email subject", value=f"Weekly Payroll Report - {selected_label}")
 
+        if st.button("📧 Send Payroll Report by Email", use_container_width=True):
+            if not email_to.strip():
+                st.warning("Please enter the receiver email address.")
+            else:
+                try:
+                    send_payroll_email(
+                        to_email=email_to.strip(),
+                        subject=email_subject.strip(),
+                        html_body=html_body,
+                        attachment_bytes=excel_bytes,
+                        attachment_filename=payroll_filename
+                    )
+                    st.success("Payroll report sent successfully.")
+                except Exception as e:
+                    st.error("Could not send payroll email.")
+                    st.exception(e)
+
+    with st.expander("Preview email body"):
+        st.markdown(html_body, unsafe_allow_html=True)
 
 
 def projects_page():
@@ -542,8 +722,32 @@ def projects_page():
         st.rerun()
 
 # =========================================================
-# SIDEBAR NAVIGATION
+# SIDEBAR NAVIGATION / QR WORKER MODE
 # =========================================================
+
+try:
+    url_mode = str(st.query_params.get("mode", "")).lower().strip()
+    url_page = str(st.query_params.get("page", "")).lower().strip()
+except Exception:
+    url_mode = ""
+    url_page = ""
+
+# QR worker mode: this opens only the attendance screen and hides the ERP menu.
+# Use this URL for the QR:
+# https://aarons-pricing.streamlit.app/?mode=attendance
+if url_mode in ["attendance", "worker", "qr", "checkin"]:
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"] {display: none;}
+        [data-testid="collapsedControl"] {display: none;}
+        .block-container {padding-top: 2rem; max-width: 950px;}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    attendance_page()
+    st.stop()
 
 navigation_pages = [
     "New Costing",
@@ -555,16 +759,13 @@ navigation_pages = [
     "Project Settings"
 ]
 
-try:
-    url_page = st.query_params.get("page", "")
-except Exception:
-    url_page = ""
-
 default_page_index = 0
-if str(url_page).lower() in ["attendance", "checkin", "qr"]:
+if url_page in ["attendance", "checkin", "qr"]:
     default_page_index = navigation_pages.index("Attendance Register")
-elif str(url_page).lower() in ["payroll"]:
+elif url_page in ["payroll"]:
     default_page_index = navigation_pages.index("Payroll Report")
+elif url_page in ["projects", "project-settings"]:
+    default_page_index = navigation_pages.index("Project Settings")
 
 page = st.sidebar.radio(
     "Navigation",
