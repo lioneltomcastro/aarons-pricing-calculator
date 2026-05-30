@@ -351,12 +351,12 @@ def attendance_page():
             now = datetime.now()
 
             if full_name not in worker_names:
-                # Default rate is 35. Sunday Rate is also 35 by default.
-                # You can manually change Rate or Sunday Rate later in the Workers sheet.
+                # Default rate is 35. Sunday Rate starts at 0 by default.
+                # You can manually change Sunday Rate in the weekly payroll dashboard only when needed.
                 workers_ws.append_row([
                     full_name,
                     35,
-                    35,
+                    0,
                     bsb.strip(),
                     account.strip(),
                     "Yes"
@@ -567,13 +567,15 @@ def payroll_page():
 
         worker_row = workers[workers["Name"].astype(str) == name]
         rate = 35.0
-        sunday_rate = 35.0
+        sunday_rate = 0.0
         bsb = ""
         account = ""
 
         if not worker_row.empty:
             rate = safe_float(worker_row.iloc[0].get("Rate", 35), 35.0)
-            sunday_rate = safe_float(worker_row.iloc[0].get("Sunday Rate", rate), rate)
+            # Sunday Rate must start at 0 in the weekly dashboard.
+            # You can manually edit it only for the workers who need Sunday pay.
+            sunday_rate = 0.0
             bsb = clean_text(worker_row.iloc[0].get("BSB", ""))
             account = clean_text(worker_row.iloc[0].get("Account", ""))
 
