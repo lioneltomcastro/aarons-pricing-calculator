@@ -73,7 +73,7 @@ EXPECTED_HEADERS = [
 
 st.set_page_config(
     page_title="Aaron's Pricing Calculator",
-    page_icon="ðŸ§¾",
+    page_icon="🧾",
     layout="wide"
 )
 
@@ -303,7 +303,7 @@ def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachmen
         server.send_message(msg)
 
 def attendance_page():
-    st.title("Aaron's Attendance Register")
+    st.title("👷 Aaron's Attendance Register")
     st.caption("Scan the QR, register once, then always mark attendance under your own name.")
 
     try:
@@ -324,14 +324,14 @@ def attendance_page():
 
     if not location_ok:
         st.error(
-            "ðŸ“ Location not detected.\n\n"
+            "📍 Location not detected.\n\n"
             "You must allow location access before registering attendance."
         )
         st.info(
             "How to fix it: tap the lock/info icon next to the website address, "
             "open Site settings or Permissions, set Location to Allow, then refresh this page."
         )
-        if st.button("ðŸ”„ Refresh location / Try again", use_container_width=True):
+        if st.button("🔄 Refresh location / Try again", use_container_width=True):
             st.rerun()
         return
 
@@ -365,7 +365,7 @@ def attendance_page():
         action = "Check In"
         st.info("Attendance Type: Check In")
 
-        if st.button("âœ… Register Worker and Check In", use_container_width=True):
+        if st.button("✅ Register Worker and Check In", use_container_width=True):
             full_name = f"{first_name.strip()} {last_name.strip()}".strip()
             bsb_clean = normalize_bsb(bsb)
             account_clean = normalize_account(account)
@@ -422,7 +422,7 @@ def attendance_page():
             key="existing_worker_action"
         )
 
-        if st.button("âœ… Register Attendance", use_container_width=True):
+        if st.button("✅ Register Attendance", use_container_width=True):
             now = melbourne_now()
 
             attendance_ws.append_row([
@@ -462,7 +462,7 @@ def get_week_options(attendance_dates):
 
 
 def payroll_page():
-    st.title("ðŸ’µ Weekly Payroll Dashboard")
+    st.title("💵 Weekly Payroll Dashboard")
     st.caption("Weeks run from Monday to Sunday. Select the week, review hours, BSB, account number and total payment.")
 
     try:
@@ -710,7 +710,7 @@ def payroll_page():
 
     with col_download:
         st.download_button(
-            "â¬‡ï¸ Download Payroll Report Excel",
+            "⬇️ Download Payroll Report Excel",
             data=excel_bytes,
             file_name=payroll_filename,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -722,7 +722,7 @@ def payroll_page():
         email_to = st.text_input("Send payroll to", value=default_receiver)
         email_subject = st.text_input("Email subject", value=f"Weekly Payroll Report - {selected_label}")
 
-        if st.button("ðŸ“§ Send Payroll Report by Email", use_container_width=True):
+        if st.button("📧 Send Payroll Report by Email", use_container_width=True):
             if not email_to.strip():
                 st.warning("Please enter the receiver email address.")
             else:
@@ -744,7 +744,7 @@ def payroll_page():
 
 
 def projects_page():
-    st.title("ðŸ—ï¸ Project Settings")
+    st.title("🏗️ Project Settings")
     st.caption("Add projects here so workers can choose them from the QR attendance form.")
 
     try:
@@ -769,7 +769,7 @@ def projects_page():
     with c2:
         active = st.selectbox("Active", ["Yes", "No"])
 
-    if st.button("âž• Add Project", use_container_width=True):
+    if st.button("➕ Add Project", use_container_width=True):
         if not new_project.strip():
             st.warning("Please enter a project name.")
             return
@@ -838,7 +838,7 @@ page = st.sidebar.radio(
     index=default_page_index
 )
 
-st.title("Aaron's Pricing Calculator")
+st.title("🧾 Aaron's Pricing Calculator")
 st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
 
 if page == "Attendance Register":
@@ -1088,7 +1088,7 @@ def build_quote_options(saved_df):
 
 if page == "Saved Costings":
 
-    st.title("ðŸ“‚ Saved Costings")
+    st.title("📂 Saved Costings")
 
     saved_df = load_saved_costings()
 
@@ -1162,7 +1162,7 @@ if page == "Saved Costings":
 
 if page == "Manager View":
 
-    st.title("ðŸ“Š Manager Costing View")
+    st.title("📊 Manager Costing View")
 
     saved_df = load_saved_costings()
 
@@ -1287,7 +1287,7 @@ if page == "Manager View":
 
 if page == "Edit Costing":
 
-    st.title("âœï¸ Edit Costing")
+    st.title("✏️ Edit Costing")
 
     saved_df = load_saved_costings()
 
@@ -1539,7 +1539,7 @@ if page == "Edit Costing":
 
     st.markdown("### Save Changes")
 
-    if st.button("ðŸ’¾ Update Costing"):
+    if st.button("💾 Update Costing"):
 
         now = melbourne_now().strftime("%d/%m/%Y %H:%M")
         updated_rows = []
@@ -1582,7 +1582,7 @@ if page == "Edit Costing":
 
         try:
             update_costing_records(selected_quote, final_df)
-            st.success(f"âœ… Quote updated successfully: {selected_quote}")
+            st.success(f"✅ Quote updated successfully: {selected_quote}")
         except Exception as e:
             st.error("Could not update costing.")
             st.exception(e)
@@ -1665,13 +1665,13 @@ st.subheader("2. Rooms / Areas & Work Items")
 b1, b2, b3 = st.columns([1, 1, 4])
 
 with b1:
-    st.button("âž• Add Room / Area", on_click=add_room, use_container_width=True)
+    st.button("➕ Add Room / Area", on_click=add_room, use_container_width=True)
 
 with b2:
-    st.button("âž– Remove Last Room", on_click=remove_room, use_container_width=True)
+    st.button("➖ Remove Last Room", on_click=remove_room, use_container_width=True)
 
 with b3:
-    st.button("ðŸ”„ Reset All Rooms", on_click=reset_all)
+    st.button("🔄 Reset All Rooms", on_click=reset_all)
 
 items = []
 categories = ["All"] + sorted(rates_df["category"].dropna().unique().tolist())
@@ -1695,7 +1695,7 @@ for room_idx in range(st.session_state.room_count):
 
     with a1:
         st.button(
-            f"âž• Add Work Item - {room_name}",
+            f"➕ Add Work Item - {room_name}",
             key=f"add_item_{room_key}",
             on_click=add_work_item,
             args=(room_idx,),
@@ -1704,7 +1704,7 @@ for room_idx in range(st.session_state.room_count):
 
     with a2:
         st.button(
-            f"âž– Remove Last Item - {room_name}",
+            f"➖ Remove Last Item - {room_name}",
             key=f"remove_item_{room_key}",
             on_click=remove_work_item,
             args=(room_idx,),
@@ -1739,7 +1739,7 @@ for room_idx in range(st.session_state.room_count):
         if "wall" in item_lower or "partition" in item_lower:
             measurement_options.append("Wall Calculator (Total Length x Height)")
 
-        if unit_lower in ["m2", "sqm", "sq m", "mÂ²"]:
+        if unit_lower in ["m2", "sqm", "sq m", "m²"]:
             measurement_options.append("Area Calculator (Length x Width)")
 
         measurement_method = st.radio(
@@ -1774,10 +1774,10 @@ for room_idx in range(st.session_state.room_count):
 
             if unit_lower in ["lm", "linear metre", "linear meter"]:
                 quantity = total_wall_length
-                measurement_note = f"Wall area: {wall_area:.2f} mÂ². Pricing quantity used: {quantity:.2f} lm."
+                measurement_note = f"Wall area: {wall_area:.2f} m². Pricing quantity used: {quantity:.2f} lm."
             else:
                 quantity = wall_area
-                measurement_note = f"Wall area used for pricing: {quantity:.2f} mÂ²."
+                measurement_note = f"Wall area used for pricing: {quantity:.2f} m²."
 
             st.info(measurement_note)
 
@@ -1803,7 +1803,7 @@ for room_idx in range(st.session_state.room_count):
                 )
 
             quantity = length * width
-            measurement_note = f"Area used for pricing: {quantity:.2f} mÂ²."
+            measurement_note = f"Area used for pricing: {quantity:.2f} m²."
             st.info(measurement_note)
 
         else:
@@ -1841,13 +1841,13 @@ for room_idx in range(st.session_state.room_count):
         productivity = float(row["productivity_per_day"])
 
         if your_rate < market_min:
-            st.error(f"ðŸš¨ Below market minimum: {money(market_min)}/{unit}")
+            st.error(f"🚨 Below market minimum: {money(market_min)}/{unit}")
         elif market_min <= your_rate < market_rec:
-            st.warning(f"âš ï¸ Below recommended: {money(market_rec)}/{unit}")
+            st.warning(f"⚠️ Below recommended: {money(market_rec)}/{unit}")
         elif market_rec <= your_rate <= market_high:
-            st.success("âœ… Within normal market range.")
+            st.success("✅ Within normal market range.")
         else:
-            st.info(f"ðŸ’Ž Premium pricing. Market high: {money(market_high)}/{unit}")
+            st.info(f"💎 Premium pricing. Market high: {money(market_high)}/{unit}")
 
         m1, m2, m3, m4 = st.columns(4)
         m1.caption(f"Market Min: {money(market_min)}/{unit}")
@@ -2069,7 +2069,7 @@ st.text_area("Copy Summary", value=summary_text.strip(), height=320)
 
 st.markdown("## Save Costing")
 
-if st.button("ðŸ’¾ Save Costing to Google Sheets"):
+if st.button("💾 Save Costing to Google Sheets"):
     if items_df.empty:
         st.warning("No work items to save.")
     else:
@@ -2116,7 +2116,7 @@ if st.button("ðŸ’¾ Save Costing to Google Sheets"):
 
             ws.append_rows(rows, value_input_option="RAW")
 
-            st.success(f"âœ… Costing saved successfully. Quote ID: {quote_id}")
+            st.success(f"✅ Costing saved successfully. Quote ID: {quote_id}")
 
         except Exception as e:
             st.error("Could not save costing to Google Sheets.")
