@@ -303,7 +303,7 @@ def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachmen
         server.send_message(msg)
 
 def attendance_page():
-    st.title("ðŸ‘· Aaron's Attendance Register")
+    st.title("Aaron's Attendance Register")
     st.caption("Scan the QR, register once, then always mark attendance under your own name.")
 
     try:
