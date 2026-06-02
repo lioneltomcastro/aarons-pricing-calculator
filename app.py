@@ -838,7 +838,7 @@ page = st.sidebar.radio(
     index=default_page_index
 )
 
-st.title("ðŸ§¾ Aaron's Pricing Calculator")
+st.title("Aaron's Pricing Calculator")
 st.caption("Demolition, strip-out, flooring and rubbish removal cost calculator.")
 
 if page == "Attendance Register":
