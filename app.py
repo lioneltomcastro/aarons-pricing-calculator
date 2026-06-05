@@ -27,17 +27,8 @@ COSTING_SHEET_NAME = "Costing_Records"
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 def melbourne_now():
-    """Return the current date/time in Melbourne, Australia."""
+    """Current Melbourne time, used for all attendance records."""
     return datetime.now(MELBOURNE_TZ).replace(tzinfo=None)
-
-def normalize_bsb(value):
-    """Keep BSB as text and preserve leading zero. Australian BSB should be 6 digits."""
-    digits = "".join(ch for ch in str(value).strip() if ch.isdigit())
-    return digits.zfill(6) if digits else ""
-
-def normalize_account(value):
-    """Keep account number as text so Google Sheets does not change it."""
-    return str(value).strip()
 
 EXPECTED_HEADERS = [
     "quote_id",
@@ -87,7 +78,7 @@ ATTENDANCE_SHEET_NAME = "Attendance"
 PROJECTS_SHEET_NAME = "Projects"
 
 # Workers register bank details once. Rates can be edited manually later in Google Sheets.
-WORKERS_HEADERS = ["Name", "Rate", "BSB", "Account", "Sunday Rate", "Active"]
+WORKERS_HEADERS = ["Name", "Rate", "BSB", "Account", "Sunday Rate", "Active", "Email"]
 ATTENDANCE_HEADERS = ["Timestamp", "Date", "Name", "Project", "Action", "Latitude", "Longitude", "Location Link"]
 PROJECTS_HEADERS = ["Project", "Active"]
 ATTENDANCE_ACTIONS = ["Check In", "Lunch Start", "Lunch End", "Check Out"]
@@ -215,7 +206,7 @@ def make_payroll_excel(summary_df, daily_df, selected_label):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="Payroll Summary", index=False, startrow=3)
-        daily_df.to_excel(writer, sheet_name="Daily Breakdown", index=False)
+        daily_df.to_excel(writer, sheet_name="Daily Attendance Detail", index=False)
 
         ws = writer.book["Payroll Summary"]
         ws["A1"] = "Aaron's Demolition - Weekly Payroll Report"
@@ -237,19 +228,50 @@ def make_payroll_excel(summary_df, daily_df, selected_label):
     return output.getvalue()
 
 
-def build_payroll_email_html(report_df, selected_label, total_hours, total_pay):
+def build_attendance_detail_html(daily_df):
+    """Build daily attendance detail table grouped by worker."""
+    if daily_df is None or daily_df.empty:
+        return "<p>No daily attendance detail available.</p>"
+
+    html_parts = []
+
+    for worker in sorted(daily_df["Worker"].dropna().astype(str).unique()):
+        worker_df = daily_df[daily_df["Worker"].astype(str) == worker].copy()
+
+        display_cols = [
+            "Date",
+            "Project",
+            "Check In",
+            "Lunch Start",
+            "Lunch End",
+            "Check Out",
+            "Lunch Hours",
+            "Payable Hours",
+            "Note"
+        ]
+
+        display_cols = [c for c in display_cols if c in worker_df.columns]
+        html_parts.append(f"<h4>{worker}</h4>")
+        html_parts.append(worker_df[display_cols].to_html(index=False, border=1, justify="center"))
+
+    return "".join(html_parts)
+
+
+def build_payroll_email_html(report_df, daily_df, selected_label, total_hours, total_pay):
     email_df = report_df.copy()
+
     for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
         if col in email_df.columns:
             email_df[col] = email_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
 
     html_table = email_df.to_html(index=False, border=1, justify="center")
+    attendance_detail_html = build_attendance_detail_html(daily_df)
 
     return f"""
     <html>
     <body>
         <p>Hi Aaron,</p>
-        <p>Please find below the payroll summary for the week <b>{selected_label}</b>.</p>
+        <p>Please find below the payroll summary for the selected period <b>{selected_label}</b>.</p>
         {html_table}
         <p><b>Summary</b></p>
         <p>
@@ -257,12 +279,59 @@ def build_payroll_email_html(report_df, selected_label, total_hours, total_pay):
             Total Payable Hours: {total_hours:,.2f}<br>
             Total Payroll: AUD {total_pay:,.2f}
         </p>
+        <h3>Daily Attendance Detail</h3>
+        {attendance_detail_html}
         <p>The detailed payroll report is attached for your records.</p>
         <p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
     </body>
     </html>
     """
 
+
+def build_worker_email_html(worker_name, worker_summary_df, worker_daily_df, selected_label):
+    """Build one worker email only with that worker's own information."""
+    summary_df = worker_summary_df.copy()
+
+    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
+        if col in summary_df.columns:
+            summary_df[col] = summary_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
+
+    summary_html = summary_df.to_html(index=False, border=1, justify="center")
+
+    detail_cols = [
+        "Date",
+        "Project",
+        "Check In",
+        "Lunch Start",
+        "Lunch End",
+        "Check Out",
+        "Lunch Hours",
+        "Payable Hours",
+        "Note"
+    ]
+    detail_cols = [c for c in detail_cols if c in worker_daily_df.columns]
+    detail_html = worker_daily_df[detail_cols].to_html(index=False, border=1, justify="center") if not worker_daily_df.empty else "<p>No daily attendance detail available.</p>"
+
+    first_name = str(worker_name).split()[0] if str(worker_name).strip() else "there"
+
+    return f"""
+    <html>
+    <body>
+        <p>Hi {first_name},</p>
+        <p>Please find below your attendance and payroll summary for the selected period <b>{selected_label}</b>.</p>
+
+        <h3>Payroll Summary</h3>
+        {summary_html}
+
+        <h3>Daily Attendance Detail</h3>
+        {detail_html}
+
+        <p>If you have any questions about your attendance records, please contact management.</p>
+
+        <p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
+    </body>
+    </html>
+    """
 
 def get_secret_value(key, default=""):
     # First checks normal top-level Streamlit secrets.
@@ -275,7 +344,7 @@ def get_secret_value(key, default=""):
     return value
 
 
-def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachment_filename):
+def send_payroll_email(to_email, subject, html_body, attachment_bytes=None, attachment_filename=None):
     sender = str(get_secret_value("EMAIL_SENDER", "")).strip()
     password = str(get_secret_value("EMAIL_PASSWORD", "")).replace(" ", "").strip()
     smtp_server = str(get_secret_value("SMTP_SERVER", "smtp.gmail.com")).strip()
@@ -293,9 +362,10 @@ def send_payroll_email(to_email, subject, html_body, attachment_bytes, attachmen
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
 
-    attachment = MIMEApplication(attachment_bytes, _subtype="xlsx")
-    attachment.add_header("Content-Disposition", "attachment", filename=attachment_filename)
-    msg.attach(attachment)
+    if attachment_bytes is not None and attachment_filename:
+        attachment = MIMEApplication(attachment_bytes, _subtype="xlsx")
+        attachment.add_header("Content-Disposition", "attachment", filename=attachment_filename)
+        msg.attach(attachment)
 
     with smtplib.SMTP(smtp_server, smtp_port) as server:
         server.starttls()
@@ -316,27 +386,14 @@ def attendance_page():
         st.exception(e)
         return
 
-    # Location is mandatory. If the browser/phone does not provide it, do not show
-    # registration or attendance buttons. This prevents empty location records.
     st.markdown("### Location")
     lat, lon, location_link = get_current_location()
-    location_ok = bool(lat and lon and location_link)
 
-    if not location_ok:
-        st.error(
-            "📍 Location not detected.\n\n"
-            "You must allow location access before registering attendance."
-        )
-        st.info(
-            "How to fix it: tap the lock/info icon next to the website address, "
-            "open Site settings or Permissions, set Location to Allow, then refresh this page."
-        )
-        if st.button("🔄 Refresh location / Try again", use_container_width=True):
-            st.rerun()
-        return
-
-    st.success("Location detected automatically.")
-    st.caption(location_link)
+    if location_link:
+        st.success("Location detected automatically.")
+        st.caption(location_link)
+    else:
+        location_required_or_stop(lat, lon, location_link)
 
     workers_data = get_sheet_records_cached(WORKERS_SHEET_NAME, tuple(WORKERS_HEADERS))
     worker_names = [clean_text(w.get("Name", "")) for w in workers_data if clean_text(w.get("Name", ""))]
@@ -351,45 +408,39 @@ def attendance_page():
 
     if register_type == "First time registration":
         st.markdown("### Worker Details")
-        st.info(
-            "Your BSB and bank account are saved only once. "
-            "First time registration is saved automatically as Check In."
-        )
+        st.info("Your BSB, bank account and email are saved only once. Next time, choose 'I am already registered'.")
 
-        # One-column layout fixes the mobile display order.
-        first_name = st.text_input("First Name *")
-        last_name = st.text_input("Last Name *")
-        bsb = st.text_input("BSB *")
-        account = st.text_input("Account Number *")
+        first_name = st.text_input("First Name")
+        last_name = st.text_input("Last Name")
+        email = st.text_input("Email")
+        bsb = st.text_input("BSB")
+        account = st.text_input("Account Number")
 
-        action = "Check In"
-        st.info("Attendance Type: Check In")
+        st.info("First time registration will automatically create a Check In record.")
 
         if st.button("✅ Register Worker and Check In", use_container_width=True):
+            location_required_or_stop(lat, lon, location_link)
+
             full_name = f"{first_name.strip()} {last_name.strip()}".strip()
             bsb_clean = normalize_bsb(bsb)
             account_clean = normalize_account(account)
+            email_clean = clean_text(email)
 
-            if not first_name.strip() or not last_name.strip() or not bsb_clean or not account_clean:
-                st.warning("Please complete first name, last name, BSB and account number.")
-                return
-
-            if len(bsb_clean) != 6:
-                st.warning("Please enter a valid 6-digit BSB.")
+            if not first_name.strip() or not last_name.strip() or not bsb_clean or not account_clean or not email_clean:
+                st.warning("Please complete first name, last name, email, BSB and account number.")
                 return
 
             now = melbourne_now()
 
             if full_name not in worker_names:
-                # Workers sheet order:
-                # Name | Rate | BSB | Account | Sunday Rate | Active
                 workers_ws.append_row([
                     full_name,
                     35,
                     bsb_clean,
                     account_clean,
                     0,
-                    "Yes"
+                    "Yes",
+                    email_clean
                 ], value_input_option="RAW")
                 clear_sheet_cache()
             else:
@@ -400,14 +451,14 @@ def attendance_page():
                 now.strftime("%Y-%m-%d"),
                 full_name,
                 project,
-                action,
+                "Check In",
                 lat,
                 lon,
                 location_link
             ], value_input_option="RAW")
-            clear_sheet_cache()
 
-            st.success(f"Check In registered for {full_name} at {now.strftime('%I:%M %p')} Melbourne time.")
+            clear_sheet_cache()
+            st.success(f"Check In registered for {full_name} at {now.strftime('%I:%M %p')}.")
 
     else:
         if not worker_names:
@@ -423,6 +474,8 @@ def attendance_page():
         )
 
         if st.button("✅ Register Attendance", use_container_width=True):
+            location_required_or_stop(lat, lon, location_link)
+
             now = melbourne_now()
 
             attendance_ws.append_row([
@@ -435,9 +488,10 @@ def attendance_page():
                 lon,
                 location_link
             ], value_input_option="RAW")
-            clear_sheet_cache()
 
-            st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')} Melbourne time.")
+            clear_sheet_cache()
+            st.success(f"{action} registered for {name} at {now.strftime('%I:%M %p')}.")
+
 
 def get_week_options(attendance_dates):
     today = melbourne_now().date()
@@ -501,9 +555,24 @@ def payroll_page():
         return
 
     week_options = get_week_options(attendance["Date"])
-    selected_label = st.selectbox("Select Week", [w[0] for w in week_options])
-    selected_week = next(w for w in week_options if w[0] == selected_label)
-    start_date, end_date = selected_week[1], selected_week[2]
+    week_labels = [w[0] for w in week_options]
+
+    st.markdown("### Select Payroll Period")
+    c_week1, c_week2 = st.columns(2)
+
+    with c_week1:
+        start_week_label = st.selectbox("Start Week", week_labels, index=min(len(week_labels) - 1, 0))
+
+    with c_week2:
+        end_week_label = st.selectbox("End Week", week_labels, index=0)
+
+    start_week = next(w for w in week_options if w[0] == start_week_label)
+    end_week = next(w for w in week_options if w[0] == end_week_label)
+
+    start_date = min(start_week[1], end_week[1])
+    end_date = max(start_week[2], end_week[2])
+
+    selected_label = f"{start_date.strftime('%d/%m/%Y')} - {end_date.strftime('%d/%m/%Y')}"
 
     project_options = ["All Projects"] + sorted(attendance["Project"].dropna().astype(str).unique().tolist())
     selected_project = st.selectbox("Project Filter", project_options)
@@ -599,14 +668,16 @@ def payroll_page():
         sunday_rate = 0.0
         bsb = ""
         account = ""
+        email = ""
 
         if not worker_row.empty:
             rate = safe_float(worker_row.iloc[0].get("Rate", 35), 35.0)
-            # Sunday Rate must start at 0 in the weekly dashboard.
+            # Sunday Rate starts at 0 in the weekly dashboard.
             # You can manually edit it only for the workers who need Sunday pay.
             sunday_rate = 0.0
             bsb = normalize_bsb(worker_row.iloc[0].get("BSB", ""))
-            account = clean_text(worker_row.iloc[0].get("Account", ""))
+            account = normalize_account(worker_row.iloc[0].get("Account", ""))
+            email = clean_text(worker_row.iloc[0].get("Email", ""))
 
         normal_pay = total_normal_hours * rate
         sunday_pay = total_sunday_hours * sunday_rate
@@ -617,6 +688,7 @@ def payroll_page():
             "Name": name,
             "BSB": bsb,
             "Account": account,
+            "Email": email,
             "Normal Hours": round(total_normal_hours, 2),
             "Sunday Hours": round(total_sunday_hours, 2),
             "Total Hours": round(total_hours, 2),
@@ -664,6 +736,7 @@ def payroll_page():
             "Name": st.column_config.TextColumn("Name", disabled=True),
             "BSB": st.column_config.TextColumn("BSB", disabled=True),
             "Account": st.column_config.TextColumn("Account", disabled=True),
+            "Email": st.column_config.TextColumn("Email", disabled=True),
             "Normal Hours": st.column_config.NumberColumn("Normal Hours", disabled=True, format="%.2f"),
             "Sunday Hours": st.column_config.NumberColumn("Sunday Hours", disabled=True, format="%.2f"),
             "Total Hours": st.column_config.NumberColumn("Total Hours", disabled=True, format="%.2f"),
@@ -703,44 +776,95 @@ def payroll_page():
 
     payroll_filename = f"payroll_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
     excel_bytes = make_payroll_excel(editable_report, daily_report, selected_label)
-    html_body = build_payroll_email_html(editable_report, selected_label, total_hours, total_pay)
+    html_body = build_payroll_email_html(editable_report, daily_report, selected_label, total_hours, total_pay)
 
     st.markdown("### Download or Email Payroll Report")
-    col_download, col_email = st.columns(2)
 
-    with col_download:
-        st.download_button(
-            "⬇️ Download Payroll Report Excel",
-            data=excel_bytes,
-            file_name=payroll_filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+    st.download_button(
+        "⬇️ Download Payroll Report Excel",
+        data=excel_bytes,
+        file_name=payroll_filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
-    with col_email:
-        default_receiver = st.secrets.get("EMAIL_RECEIVER", "")
-        email_to = st.text_input("Send payroll to", value=default_receiver)
-        email_subject = st.text_input("Email subject", value=f"Weekly Payroll Report - {selected_label}")
+    st.markdown("### Send Report to Aaron")
+    default_receiver = st.secrets.get("EMAIL_RECEIVER", "")
+    email_to = st.text_input("Aaron email", value=default_receiver)
+    email_subject = st.text_input("Aaron email subject", value=f"Weekly Payroll Report - {selected_label}")
 
-        if st.button("📧 Send Payroll Report by Email", use_container_width=True):
-            if not email_to.strip():
-                st.warning("Please enter the receiver email address.")
-            else:
-                try:
-                    send_payroll_email(
-                        to_email=email_to.strip(),
-                        subject=email_subject.strip(),
-                        html_body=html_body,
-                        attachment_bytes=excel_bytes,
-                        attachment_filename=payroll_filename
-                    )
-                    st.success("Payroll report sent successfully.")
-                except Exception as e:
-                    st.error("Could not send payroll email.")
-                    st.exception(e)
+    editable_aaron_html = st.text_area(
+        "Aaron email body",
+        value=html_body,
+        height=350
+    )
 
-    with st.expander("Preview email body"):
-        st.markdown(html_body, unsafe_allow_html=True)
+    if st.button("📧 Send Payroll Report to Aaron", use_container_width=True):
+        if not email_to.strip():
+            st.warning("Please enter Aaron's email address.")
+        else:
+            try:
+                send_payroll_email(
+                    to_email=email_to.strip(),
+                    subject=email_subject.strip(),
+                    html_body=editable_aaron_html,
+                    attachment_bytes=excel_bytes,
+                    attachment_filename=payroll_filename
+                )
+                st.success("Payroll report sent to Aaron successfully.")
+            except Exception as e:
+                st.error("Could not send payroll email to Aaron.")
+                st.exception(e)
+
+    with st.expander("Preview Aaron email"):
+        st.markdown(editable_aaron_html, unsafe_allow_html=True)
+
+    st.markdown("### Send Individual Worker Email")
+    worker_email_options = editable_report["Name"].dropna().astype(str).tolist()
+    selected_worker_email = st.selectbox("Select worker", worker_email_options)
+
+    worker_summary = editable_report[editable_report["Name"].astype(str) == selected_worker_email].copy()
+    worker_daily = daily_report[daily_report["Worker"].astype(str) == selected_worker_email].copy()
+
+    default_worker_email = ""
+    if not worker_summary.empty and "Email" in worker_summary.columns:
+        default_worker_email = str(worker_summary.iloc[0].get("Email", "")).strip()
+
+    worker_to = st.text_input("Worker email", value=default_worker_email)
+    worker_subject = st.text_input("Worker email subject", value=f"Your Attendance Summary - {selected_label}")
+
+    worker_html_body = build_worker_email_html(
+        selected_worker_email,
+        worker_summary,
+        worker_daily,
+        selected_label
+    )
+
+    editable_worker_html = st.text_area(
+        "Worker email body",
+        value=worker_html_body,
+        height=350
+    )
+
+    if st.button("📧 Send Worker Attendance Email", use_container_width=True):
+        if not worker_to.strip():
+            st.warning("Please enter the worker email address.")
+        else:
+            try:
+                send_payroll_email(
+                    to_email=worker_to.strip(),
+                    subject=worker_subject.strip(),
+                    html_body=editable_worker_html,
+                    attachment_bytes=None,
+                    attachment_filename=None
+                )
+                st.success(f"Attendance email sent to {selected_worker_email}.")
+            except Exception as e:
+                st.error("Could not send worker email.")
+                st.exception(e)
+
+    with st.expander("Preview worker email"):
+        st.markdown(editable_worker_html, unsafe_allow_html=True)
 
 
 def projects_page():
