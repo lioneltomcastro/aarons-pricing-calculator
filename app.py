@@ -241,75 +241,35 @@ def make_payroll_excel(summary_df, daily_df, selected_label):
     return output.getvalue()
 
 
-def build_attendance_detail_html(daily_df):
-    """Build daily attendance detail table grouped by worker."""
+def format_table_plain(df, columns):
+    """Create a simple plain-text table for email body."""
+    if df is None or df.empty:
+        return "No records found."
+
+    use_cols = [c for c in columns if c in df.columns]
+    display_df = df[use_cols].copy()
+
+    for col in display_df.columns:
+        display_df[col] = display_df[col].astype(str)
+
+    widths = {}
+    for col in display_df.columns:
+        widths[col] = max(len(str(col)), display_df[col].map(lambda x: len(str(x))).max())
+
+    header = " | ".join(str(col).ljust(widths[col]) for col in display_df.columns)
+    line = "-+-".join("-" * widths[col] for col in display_df.columns)
+
+    rows = []
+    for _, row in display_df.iterrows():
+        rows.append(" | ".join(str(row[col]).ljust(widths[col]) for col in display_df.columns))
+
+    return "\n".join([header, line] + rows)
+
+
+def build_attendance_detail_text(daily_df):
+    """Build daily attendance detail grouped by worker as plain text."""
     if daily_df is None or daily_df.empty:
-        return "<p>No daily attendance detail available.</p>"
-
-    html_parts = []
-
-    for worker in sorted(daily_df["Worker"].dropna().astype(str).unique()):
-        worker_df = daily_df[daily_df["Worker"].astype(str) == worker].copy()
-
-        display_cols = [
-            "Date",
-            "Project",
-            "Check In",
-            "Lunch Start",
-            "Lunch End",
-            "Check Out",
-            "Lunch Hours",
-            "Payable Hours",
-            "Note"
-        ]
-
-        display_cols = [c for c in display_cols if c in worker_df.columns]
-        html_parts.append(f"<h4>{worker}</h4>")
-        html_parts.append(worker_df[display_cols].to_html(index=False, border=1, justify="center"))
-
-    return "".join(html_parts)
-
-
-def build_payroll_email_html(report_df, daily_df, selected_label, total_hours, total_pay):
-    email_df = report_df.copy()
-
-    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
-        if col in email_df.columns:
-            email_df[col] = email_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
-
-    html_table = email_df.to_html(index=False, border=1, justify="center")
-    attendance_detail_html = build_attendance_detail_html(daily_df)
-
-    return f"""
-    <html>
-    <body>
-        <p>Hi Aaron,</p>
-        <p>Please find below the payroll summary for the selected period <b>{selected_label}</b>.</p>
-        {html_table}
-        <p><b>Summary</b></p>
-        <p>
-            Total Workers: {len(report_df)}<br>
-            Total Payable Hours: {total_hours:,.2f}<br>
-            Total Payroll: AUD {total_pay:,.2f}
-        </p>
-        <h3>Daily Attendance Detail</h3>
-        {attendance_detail_html}
-        <p>The detailed payroll report is attached for your records.</p>
-        <p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
-    </body>
-    </html>
-    """
-
-
-def build_worker_email_html(worker_name, worker_summary_df, worker_daily_df, selected_label):
-    """Build one worker email only with that worker's own information."""
-    summary_df = worker_summary_df.copy()
-
-    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
-        if col in summary_df.columns:
-            summary_df[col] = summary_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
-
-    summary_html = summary_df.to_html(index=False, border=1, justify="center")
+        return "No daily attendance detail available."
 
     detail_cols = [
         "Date",
@@ -322,29 +282,128 @@ def build_worker_email_html(worker_name, worker_summary_df, worker_daily_df, sel
         "Payable Hours",
         "Note"
     ]
-    detail_cols = [c for c in detail_cols if c in worker_daily_df.columns]
-    detail_html = worker_daily_df[detail_cols].to_html(index=False, border=1, justify="center") if not worker_daily_df.empty else "<p>No daily attendance detail available.</p>"
+
+    parts = []
+
+    for worker in sorted(daily_df["Worker"].dropna().astype(str).unique()):
+        worker_df = daily_df[daily_df["Worker"].astype(str) == worker].copy()
+        parts.append(worker)
+        parts.append(format_table_plain(worker_df, detail_cols))
+        parts.append("")
+
+    return "\n".join(parts).strip()
+
+
+def build_payroll_email_text(report_df, daily_df, selected_label, total_hours, total_pay):
+    """Aaron email body as editable plain text, without internal Email column."""
+    email_df = report_df.copy()
+
+    if "Email" in email_df.columns:
+        email_df = email_df.drop(columns=["Email"])
+
+    payroll_cols = [
+        "Name",
+        "BSB",
+        "Account",
+        "Normal Hours",
+        "Sunday Hours",
+        "Total Hours",
+        "Lunch Deducted",
+        "Rate",
+        "Sunday Rate",
+        "Total Pay",
+        "Adjustment AUD"
+    ]
+
+    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
+        if col in email_df.columns:
+            email_df[col] = email_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
+
+    payroll_table = format_table_plain(email_df, payroll_cols)
+    attendance_detail = build_attendance_detail_text(daily_df)
+
+    return f"""Hi Aaron,
+
+Please find below the payroll summary for the selected period: {selected_label}.
+
+Payroll Summary
+
+{payroll_table}
+
+Summary
+
+Total Workers: {len(report_df)}
+Total Payable Hours: {total_hours:,.2f}
+Total Payroll: AUD {total_pay:,.2f}
+
+Daily Attendance Detail
+
+{attendance_detail}
+
+The detailed payroll report is attached for your records.
+
+Kind regards,
+Lionel Castro
+Aaron's Demolition"""
+
+
+def build_worker_email_text(worker_name, worker_summary_df, worker_daily_df, selected_label):
+    """Worker email body as editable plain text, only for the selected worker."""
+    summary_df = worker_summary_df.copy()
+
+    if "Email" in summary_df.columns:
+        summary_df = summary_df.drop(columns=["Email"])
+
+    summary_cols = [
+        "Name",
+        "Normal Hours",
+        "Sunday Hours",
+        "Total Hours",
+        "Lunch Deducted",
+        "Rate",
+        "Sunday Rate",
+        "Total Pay",
+        "Adjustment AUD"
+    ]
+
+    detail_cols = [
+        "Date",
+        "Project",
+        "Check In",
+        "Lunch Start",
+        "Lunch End",
+        "Check Out",
+        "Lunch Hours",
+        "Payable Hours",
+        "Note"
+    ]
+
+    for col in ["Normal Hours", "Sunday Hours", "Total Hours", "Lunch Deducted", "Rate", "Sunday Rate", "Adjustment AUD", "Total Pay"]:
+        if col in summary_df.columns:
+            summary_df[col] = summary_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
+
+    summary_table = format_table_plain(summary_df, summary_cols)
+    detail_table = format_table_plain(worker_daily_df, detail_cols)
 
     first_name = str(worker_name).split()[0] if str(worker_name).strip() else "there"
 
-    return f"""
-    <html>
-    <body>
-        <p>Hi {first_name},</p>
-        <p>Please find below your attendance and payroll summary for the selected period <b>{selected_label}</b>.</p>
+    return f"""Hi {first_name},
 
-        <h3>Payroll Summary</h3>
-        {summary_html}
+Please find below your attendance and payroll summary for the selected period: {selected_label}.
 
-        <h3>Daily Attendance Detail</h3>
-        {detail_html}
+Payroll Summary
 
-        <p>If you have any questions about your attendance records, please contact management.</p>
+{summary_table}
 
-        <p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
-    </body>
-    </html>
-    """
+Daily Attendance Detail
+
+{detail_table}
+
+If you have any questions about your attendance records, please contact management.
+
+Kind regards,
+Lionel Castro
+Aaron's Demolition"""
 
 def get_secret_value(key, default=""):
     # First checks normal top-level Streamlit secrets.
@@ -357,7 +416,7 @@ def get_secret_value(key, default=""):
     return value
 
 
-def send_payroll_email(to_email, subject, html_body, attachment_bytes=None, attachment_filename=None):
+def send_payroll_email(to_email, subject, email_body, attachment_bytes=None, attachment_filename=None, is_html=False):
     sender = str(get_secret_value("EMAIL_SENDER", "")).strip()
     password = str(get_secret_value("EMAIL_PASSWORD", "")).replace(" ", "").strip()
     smtp_server = str(get_secret_value("SMTP_SERVER", "smtp.gmail.com")).strip()
@@ -373,7 +432,8 @@ def send_payroll_email(to_email, subject, html_body, attachment_bytes=None, atta
     msg["From"] = sender
     msg["To"] = to_email
     msg["Subject"] = subject
-    msg.attach(MIMEText(html_body, "html"))
+
+    msg.attach(MIMEText(email_body, "html" if is_html else "plain"))
 
     if attachment_bytes is not None and attachment_filename:
         attachment = MIMEApplication(attachment_bytes, _subtype="xlsx")
@@ -782,14 +842,22 @@ def payroll_page():
     m3.metric("Total Payroll", f"AUD {total_pay:,.2f}")
 
     st.markdown("### Final Report Preview")
-    st.dataframe(editable_report, use_container_width=True, hide_index=True)
+    preview_report = editable_report.copy()
+    if "Email" in preview_report.columns:
+        preview_report = preview_report.drop(columns=["Email"])
+    st.dataframe(preview_report, use_container_width=True, hide_index=True)
 
     st.markdown("### Daily Attendance Breakdown")
     st.dataframe(daily_report, use_container_width=True, hide_index=True)
 
     payroll_filename = f"payroll_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.xlsx"
-    excel_bytes = make_payroll_excel(editable_report, daily_report, selected_label)
-    html_body = build_payroll_email_html(editable_report, daily_report, selected_label, total_hours, total_pay)
+
+    report_for_aaron = editable_report.copy()
+    if "Email" in report_for_aaron.columns:
+        report_for_aaron = report_for_aaron.drop(columns=["Email"])
+
+    excel_bytes = make_payroll_excel(report_for_aaron, daily_report, selected_label)
+    aaron_email_body = build_payroll_email_text(report_for_aaron, daily_report, selected_label, total_hours, total_pay)
 
     st.markdown("### Download or Email Payroll Report")
 
@@ -808,7 +876,7 @@ def payroll_page():
 
     editable_aaron_html = st.text_area(
         "Aaron email body",
-        value=html_body,
+        value=aaron_email_body,
         height=350
     )
 
@@ -820,7 +888,7 @@ def payroll_page():
                 send_payroll_email(
                     to_email=email_to.strip(),
                     subject=email_subject.strip(),
-                    html_body=editable_aaron_html,
+                    email_body=editable_aaron_html,
                     attachment_bytes=excel_bytes,
                     attachment_filename=payroll_filename
                 )
@@ -830,7 +898,7 @@ def payroll_page():
                 st.exception(e)
 
     with st.expander("Preview Aaron email"):
-        st.markdown(editable_aaron_html, unsafe_allow_html=True)
+        st.text(editable_aaron_html)
 
     st.markdown("### Send Individual Worker Email")
     worker_email_options = editable_report["Name"].dropna().astype(str).tolist()
@@ -846,7 +914,7 @@ def payroll_page():
     worker_to = st.text_input("Worker email", value=default_worker_email)
     worker_subject = st.text_input("Worker email subject", value=f"Your Attendance Summary - {selected_label}")
 
-    worker_html_body = build_worker_email_html(
+    worker_email_body = build_worker_email_text(
         selected_worker_email,
         worker_summary,
         worker_daily,
@@ -855,7 +923,7 @@ def payroll_page():
 
     editable_worker_html = st.text_area(
         "Worker email body",
-        value=worker_html_body,
+        value=worker_email_body,
         height=350
     )
 
@@ -867,7 +935,7 @@ def payroll_page():
                 send_payroll_email(
                     to_email=worker_to.strip(),
                     subject=worker_subject.strip(),
-                    html_body=editable_worker_html,
+                    email_body=editable_worker_html,
                     attachment_bytes=None,
                     attachment_filename=None
                 )
@@ -877,7 +945,7 @@ def payroll_page():
                 st.exception(e)
 
     with st.expander("Preview worker email"):
-        st.markdown(editable_worker_html, unsafe_allow_html=True)
+        st.text(editable_worker_html)
 
 
 def projects_page():
