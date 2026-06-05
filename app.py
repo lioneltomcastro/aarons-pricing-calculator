@@ -252,12 +252,31 @@ def dataframe_to_email_table(df):
     if df is None or df.empty:
         return "<p>No records found.</p>"
 
-    return df.to_html(
+    html = df.to_html(
         index=False,
         border=0,
         classes="payroll-table",
         escape=False
     )
+
+    # Remove line breaks/extra indentation so Streamlit preview does not show raw HTML/code blocks.
+    html = " ".join(str(html).split())
+    return html
+
+
+def email_css():
+    return """
+<style>
+body{font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.45;}
+h2{color:#1f2937;margin-top:22px;margin-bottom:10px;font-size:18px;}
+h3{color:#374151;margin-top:18px;margin-bottom:8px;font-size:15px;}
+.summary-box{background:#f3f4f6;border:1px solid #d1d5db;border-radius:8px;padding:12px;margin:12px 0 18px 0;}
+table.payroll-table{border-collapse:collapse;width:100%;margin-bottom:18px;}
+table.payroll-table th{background:#1f2937;color:#fff;padding:8px;border:1px solid #d1d5db;text-align:left;font-size:12px;}
+table.payroll-table td{padding:7px;border:1px solid #d1d5db;font-size:12px;vertical-align:top;}
+table.payroll-table tr:nth-child(even){background:#f9fafb;}
+</style>
+"""
 
 
 def build_attendance_detail_html(daily_df):
@@ -287,67 +306,6 @@ def build_attendance_detail_html(daily_df):
     return "".join(parts)
 
 
-def email_css():
-    return """
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            font-size: 14px;
-            color: #222222;
-            line-height: 1.45;
-        }
-        h2 {
-            color: #1f2937;
-            margin-top: 22px;
-            margin-bottom: 10px;
-            font-size: 18px;
-        }
-        h3 {
-            color: #374151;
-            margin-top: 18px;
-            margin-bottom: 8px;
-            font-size: 15px;
-        }
-        .summary-box {
-            background: #f3f4f6;
-            border: 1px solid #d1d5db;
-            border-radius: 8px;
-            padding: 12px;
-            margin: 12px 0 18px 0;
-        }
-        .note-box {
-            background: #fff7ed;
-            border: 1px solid #fed7aa;
-            border-radius: 8px;
-            padding: 12px;
-            margin: 12px 0 18px 0;
-        }
-        table.payroll-table {
-            border-collapse: collapse;
-            width: 100%;
-            margin-bottom: 18px;
-        }
-        table.payroll-table th {
-            background: #1f2937;
-            color: #ffffff;
-            padding: 8px;
-            border: 1px solid #d1d5db;
-            text-align: left;
-            font-size: 12px;
-        }
-        table.payroll-table td {
-            padding: 7px;
-            border: 1px solid #d1d5db;
-            font-size: 12px;
-            vertical-align: top;
-        }
-        table.payroll-table tr:nth-child(even) {
-            background: #f9fafb;
-        }
-    </style>
-    """
-
-
 def build_payroll_email_html(report_df, daily_df, selected_label, total_hours, total_pay, custom_message=""):
     report_df = clean_report_for_email(report_df)
     email_df = report_df.copy()
@@ -372,40 +330,33 @@ def build_payroll_email_html(report_df, daily_df, selected_label, total_hours, t
         if col in email_df.columns:
             email_df[col] = email_df[col].map(lambda x: f"{float(x):,.2f}" if str(x) != "" else "")
 
-    note_html = ""
-    if str(custom_message).strip():
-        note_html = f'<div class="note-box">{str(custom_message).replace(chr(10), "<br>")}</div>'
+    payroll_table = dataframe_to_email_table(email_df)
+    attendance_detail = build_attendance_detail_html(daily_df)
 
-    return f"""
-    <html>
-    <head>{email_css()}</head>
-    <body>
-        <p>Hi Aaron,</p>
-        <p>Please find below the payroll summary for the selected period <b>{selected_label}</b>.</p>
-
-        {note_html}
-
-        <h2>Payroll Summary</h2>
-        {dataframe_to_email_table(email_df)}
-
-        <div class="summary-box">
-            <b>Summary</b><br>
-            Total Workers: {len(report_df)}<br>
-            Total Payable Hours: {total_hours:,.2f}<br>
-            Total Payroll: AUD {total_pay:,.2f}
-        </div>
-
-        <h2>Daily Attendance Detail</h2>
-        {build_attendance_detail_html(daily_df)}
-
-        <p>The detailed payroll report is attached for your records.</p>
-
-        <p>Kind regards,<br>
-        Lionel Castro<br>
-        Aaron's Demolition</p>
-    </body>
-    </html>
-    """
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+{email_css()}
+</head>
+<body>
+<p>Hi Aaron,</p>
+<p>Please find below the payroll summary for the selected period <b>{selected_label}</b>.</p>
+<h2>Payroll Summary</h2>
+{payroll_table}
+<div class="summary-box">
+<b>Summary</b><br>
+Total Workers: {len(report_df)}<br>
+Total Payable Hours: {total_hours:,.2f}<br>
+Total Payroll: AUD {total_pay:,.2f}
+</div>
+<h2>Daily Attendance Detail</h2>
+{attendance_detail}
+<p>The detailed payroll report is attached for your records.</p>
+<p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
+</body>
+</html>"""
+    return html.strip()
 
 
 def build_worker_email_html(worker_name, worker_summary_df, worker_daily_df, selected_label, custom_message=""):
@@ -444,33 +395,27 @@ def build_worker_email_html(worker_name, worker_summary_df, worker_daily_df, sel
 
     first_name = str(worker_name).split()[0] if str(worker_name).strip() else "there"
 
-    note_html = ""
-    if str(custom_message).strip():
-        note_html = f'<div class="note-box">{str(custom_message).replace(chr(10), "<br>")}</div>'
+    summary_table = dataframe_to_email_table(summary_df)
+    detail_table = dataframe_to_email_table(worker_daily_df[detail_cols]) if not worker_daily_df.empty else "<p>No daily attendance detail available.</p>"
 
-    return f"""
-    <html>
-    <head>{email_css()}</head>
-    <body>
-        <p>Hi {first_name},</p>
-        <p>Please find below your attendance and payroll summary for the selected period <b>{selected_label}</b>.</p>
-
-        {note_html}
-
-        <h2>Payroll Summary</h2>
-        {dataframe_to_email_table(summary_df)}
-
-        <h2>Daily Attendance Detail</h2>
-        {dataframe_to_email_table(worker_daily_df[detail_cols]) if not worker_daily_df.empty else "<p>No daily attendance detail available.</p>"}
-
-        <p>If you have any questions about your attendance records, please contact management.</p>
-
-        <p>Kind regards,<br>
-        Lionel Castro<br>
-        Aaron's Demolition</p>
-    </body>
-    </html>
-    """
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+{email_css()}
+</head>
+<body>
+<p>Hi {first_name},</p>
+<p>Please find below your attendance and payroll summary for the selected period <b>{selected_label}</b>.</p>
+<h2>Payroll Summary</h2>
+{summary_table}
+<h2>Daily Attendance Detail</h2>
+{detail_table}
+<p>If you have any questions about your attendance records, please contact management.</p>
+<p>Kind regards,<br>Lionel Castro<br>Aaron's Demolition</p>
+</body>
+</html>"""
+    return html.strip()
 
 def get_secret_value(key, default=""):
     # First checks normal top-level Streamlit secrets.
@@ -2389,4 +2334,3 @@ if st.button("💾 Save Costing to Google Sheets"):
         except Exception as e:
             st.error("Could not save costing to Google Sheets.")
             st.exception(e)
-
