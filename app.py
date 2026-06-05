@@ -178,6 +178,19 @@ def safe_float(value, default=0.0):
         return default
 
 
+def normalize_bsb(value):
+    """Keep BSB as 6-digit text, including leading zero."""
+    cleaned = "".join(ch for ch in str(value).strip() if ch.isdigit())
+    if cleaned == "":
+        return ""
+    return cleaned.zfill(6)
+
+
+def normalize_account(value):
+    """Keep account number as text."""
+    return "".join(ch for ch in str(value).strip() if ch.isdigit())
+
+
 
 def get_current_location():
     """Ask the phone/browser for GPS location and return lat, lon and Google Maps link."""
