@@ -939,20 +939,13 @@ def payroll_page():
     email_to = st.text_input("Aaron email", value=default_receiver)
     email_subject = st.text_input("Aaron email subject", value=f"Weekly Payroll Report - {selected_label}")
 
-    aaron_custom_message = st.text_area(
-        "Optional note for Aaron",
-        value="",
-        height=100,
-        placeholder="Write any extra note here. Leave blank if not needed."
-    )
-
     aaron_email_preview = build_payroll_email_html(
         report_for_aaron,
         daily_report,
         selected_label,
         total_hours,
         total_pay,
-        custom_message=aaron_custom_message
+        custom_message=""
     )
 
     with st.expander("Preview Aaron email", expanded=True):
@@ -989,19 +982,12 @@ def payroll_page():
     worker_to = st.text_input("Worker email", value=default_worker_email)
     worker_subject = st.text_input("Worker email subject", value=f"Your Attendance Summary - {selected_label}")
 
-    worker_custom_message = st.text_area(
-        "Optional note for worker",
-        value="",
-        height=100,
-        placeholder="Write any extra note here. Leave blank if not needed."
-    )
-
     worker_email_preview = build_worker_email_html(
         selected_worker_email,
         worker_summary,
         worker_daily,
         selected_label,
-        custom_message=worker_custom_message
+        custom_message=""
     )
 
     with st.expander("Preview worker email", expanded=True):
@@ -2403,3 +2389,4 @@ if st.button("💾 Save Costing to Google Sheets"):
         except Exception as e:
             st.error("Could not save costing to Google Sheets.")
             st.exception(e)
+
