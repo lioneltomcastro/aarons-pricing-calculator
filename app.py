@@ -215,6 +215,23 @@ def get_current_location():
         return "", "", ""
 
 
+
+def location_required_or_stop(lat, lon, location_link):
+    """Block attendance registration if location is not detected."""
+    if not lat or not lon or not location_link:
+        st.error(
+            "Location not detected. Please allow location access on your phone/browser, "
+            "refresh this page, and try again."
+        )
+        st.info(
+            "How to fix it: tap the lock/info icon next to the website address, "
+            "open Site settings or Permissions, set Location to Allow, then refresh."
+        )
+        if st.button("Refresh location / Try again", use_container_width=True):
+            st.rerun()
+        st.stop()
+
+
 def make_payroll_excel(summary_df, daily_df, selected_label):
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
