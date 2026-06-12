@@ -497,7 +497,12 @@ def attendance_page():
         location_required_or_stop(lat, lon, location_link)
 
     workers_data = get_sheet_records_cached(WORKERS_SHEET_NAME, tuple(WORKERS_HEADERS))
-    worker_names = [clean_text(w.get("Name", "")) for w in workers_data if clean_text(w.get("Name", ""))]
+    worker_names = [
+    clean_text(w.get("Name", ""))
+    for w in workers_data
+    if clean_text(w.get("Name", ""))
+    and clean_text(w.get("Active", "Yes")).lower() not in ["no", "inactive", "false", "0"]
+]
 
     register_type = st.radio(
         "Choose one option",
