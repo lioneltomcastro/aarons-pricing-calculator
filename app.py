@@ -778,7 +778,7 @@ def payroll_page():
 
         if not worker_row.empty:
             rate = safe_float(worker_row.iloc[0].get("Rate", 35), 35.0)
-sunday_rate = safe_float(worker_row.iloc[0].get("Sunday Rate", 0), 0.0)
+            sunday_rate = safe_float(worker_row.iloc[0].get("Sunday Rate", 0), 0.0)
             bsb = normalize_bsb(worker_row.iloc[0].get("BSB", ""))
             account = normalize_account(worker_row.iloc[0].get("Account", ""))
             email = clean_text(worker_row.iloc[0].get("Email", ""))
