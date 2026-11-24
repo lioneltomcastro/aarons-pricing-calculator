@@ -1175,7 +1175,6 @@ def email_signature_html():
 <b style="font-size:15px;color:#2F1F5D;">Lionel Castro</b><br>
 Aaron&#39;s Rubbish Removal &amp; Demolitions<br>
 Phone: 0433 652 377<br>
-Email: <a href="mailto:lionelcastropalomino@gmail.com" style="color:#2F1F5D;">lionelcastropalomino@gmail.com</a><br>
 <a href="{SITE_URL}" style="color:#E8762C;font-weight:bold;text-decoration:none;">www.aaronsrubbishremoval.com.au</a>
 </td></tr></table>
 {banner}"""
